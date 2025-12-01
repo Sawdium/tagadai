@@ -1,0 +1,40 @@
+# Reference directories - DO NOT COMMIT (have their own repos)
+leekwars_gardener/
+tagadalive/
+
+# Credentials - NEVER COMMIT
+.env
+.env.*
+*.env
+credentials.json
+secrets.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Data files (may contain sensitive info)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
