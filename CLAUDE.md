@@ -357,19 +357,32 @@ common_loss_patterns = []
 
 ## Getting Started
 
-1. Set up credentials:
+1. Credentials are stored in `.env` (gitignored, 600 permissions):
    ```bash
-   export LEEKWARS_LOGIN="your_username"
-   export LEEKWARS_PASSWORD="your_password"
+   # .env format:
+   LEEKWARS_LOGIN=your_email
+   LEEKWARS_PASSWORD=your_password
    ```
 
-2. Study reference code:
+2. Load credentials in Python:
+   ```python
+   from dotenv import load_dotenv
+   import os
+
+   load_dotenv()
+   login = os.getenv("LEEKWARS_LOGIN")
+   password = os.getenv("LEEKWARS_PASSWORD")
+   ```
+
+3. Study reference code:
    ```bash
-   # Review API patterns
+   # API patterns
    cat leekwars_gardener/lwapi.py
+   # AI strategy patterns
+   cat tagadalive/AI/AI
    ```
 
-3. Begin implementation (see src/ structure above)
+4. Begin implementation (see src/ structure above)
 
 ## TODO / Roadmap
 
