@@ -1,0 +1,307 @@
+class Targets{
+	
+	static Array<Entity> getTargets(Action action){
+		Array<Entity> targets
+		if(action.to == Fight.selfCell) targets = [Fight.self]
+		else{
+			if(action.item.area == AREA_LASER_LINE) 
+				targets = Targets.getLazerTargetsFromCell(action.item, action.from, action.to)
+			else 
+				targets = getItemTargets(action.item, action.to)
+		}
+		// ajout de moi même si je suis dans l'aoe
+		if(action.item.isAOE && action.item.onCaster){
+			for(Cell cell in action.to.getAreaCells(action.item.area)){
+				if(action.from == cell){
+					push(targets, Fight.self)
+					break;
+				}
+			}
+		}
+		return targets
+	}
+	
+	/*
+	 * pour chaque direction, je parcours les cases et notes les cases depuis je pourrais tirer sur la cible
+	 */
+	static Array<Cell> getLazerCellsToUseItemOnCell(Item item, Cell cell){
+		Array<Cell> result = []
+		Cell? c = Board.getCell(getCellFromXY(cell.x+item.minRange, cell.y))
+		integer inc = 1
+		if(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && lineOfSight(cell.id, c!.id, [Fight.self.cell.id])){
+			while(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && getCellDistance(cell.id, c!.id)<=item.maxRange){
+				push(result, c)
+				c = Board.getCell(getCellFromXY(cell.x+item.minRange+inc++, cell.y))
+			}
+		}
+		c = Board.getCell(getCellFromXY(cell.x-item.minRange, cell.y)); inc = 1
+		if(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && lineOfSight(cell.id, c!.id, [Fight.self.cell.id])){
+			while(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && getCellDistance(cell.id, c!.id)<=item.maxRange){
+				push(result, c)
+				c = Board.getCell(getCellFromXY(cell.x-item.minRange-inc++, cell.y))
+			}
+		}
+		c = Board.getCell(getCellFromXY(cell.x, cell.y+item.minRange)); inc = 1
+		if(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && lineOfSight(cell.id, c!.id, [Fight.self.cell.id])){
+			while(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && getCellDistance(cell.id, c!.id)<=item.maxRange){
+				push(result, c);
+				c = Board.getCell(getCellFromXY(cell.x, cell.y+item.minRange+inc++))
+			}
+		}
+		c = Board.getCell(getCellFromXY(cell.x, cell.y-item.minRange)); inc = 1
+		if(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && lineOfSight(cell.id, c!.id, [Fight.self.cell.id])){
+			while(c!=null && !Board.obstacles[c!] && !Board.entityCells[c!] && getCellDistance(cell.id, c!.id)<=item.maxRange){
+				push(result, c);
+				c = Board.getCell(getCellFromXY(cell.x, cell.y-item.minRange-inc++))
+			}
+		}
+		return result;
+	}
+	
+	/*
+	 * retourne la liste des <Entity> touchées par un tir de lazer avec @item depuis @from vers @to
+	 */
+	static Array<Entity> getLazerTargetsFromCell(Item item, Cell from, Cell to){
+		Array<Entity> result = []
+		integer inc = 0
+		integer maxInc = item.maxRange-getCellDistance(from.id, to.id)
+		Cell? tmpCell
+		if(from.x==to.x){
+			if(from.y<to.y){ // y++
+				while(true){
+					tmpCell = Board.getCell(getCellFromXY(to.x, to.y+inc))
+					if(tmpCell == null || Board.obstacles[tmpCell!] || inc > maxInc) break;
+					Entity? entityOnCell = Board.entityCells[tmpCell!]
+					if(entityOnCell != null) push(result, entityOnCell)
+					inc++
+				}
+			}else{ // y--
+				while(true){
+					tmpCell = Board.getCell(getCellFromXY(to.x, to.y-inc))
+					if(tmpCell == null || Board.obstacles[tmpCell!] || inc > maxInc) break;
+					Entity? entityOnCell = Board.entityCells[tmpCell!]
+					if(entityOnCell != null) push(result, entityOnCell)
+					inc++
+				}
+			}
+		}else if(from.y==to.y){
+			if(from.x<to.x){ // x++
+				while(true){
+					tmpCell = Board.getCell(getCellFromXY(to.x+inc, to.y))
+					if(tmpCell == null || Board.obstacles[tmpCell!] || inc > maxInc) break;
+					Entity? entityOnCell = Board.entityCells[tmpCell!]
+					if(entityOnCell != null) push(result, entityOnCell)
+					inc++
+				}
+			}else{ // x--
+				while(true){
+					tmpCell = Board.getCell(getCellFromXY(to.x-inc, to.y))
+					if(tmpCell == null || Board.obstacles[tmpCell!] || inc > maxInc) break;
+					Entity? entityOnCell = Board.entityCells[tmpCell!]
+					if(entityOnCell!= null) push(result, entityOnCell)
+					inc++
+				}
+			}
+		}
+		return result
+	}
+	
+	/*
+	 * Renvoie la cellule la plus proche ou l'entité peut tirer sur la cellule ciblée avec l'arme/puce item
+	 * @info utilise les résultats de getCellsToUseItemOnCell puis détecte la cellule la plus proche parmis celles qui sont renvoyées 
+	 * @param entity L'entité
+	 * @param item Arme ou Puce de l'entité
+	 * @param cell cellule ciblé par l'entité
+	 * @param entitiesIdToIgnore array d'id d'entity à ignorer pour lineOfSight()
+	 * @return Cell
+	 */	
+	static Cell? getCellToUseItemOnCell(Entity entity, Item item, Cell cell, Array<integer> entitiesIdToIgnore){
+		Array<Cell> cells = Targets.getCellsToUseItemOnCell(item, cell, entitiesIdToIgnore)
+		Cell? closestCell = null
+		integer tmpDist = 99999
+		for(Cell c in cells){
+			integer distance = getCellDistance(entity.cell.id, c.id)
+			if(tmpDist > distance){
+				tmpDist = distance
+				closestCell = c
+			}
+		}
+		return closestCell
+	}
+	
+	/* TODO clean this comment
+	 * Renvoie l'ensemble des <Cell> depuis lesquelles on peut tirer sur la @cell avec l'@item 
+	 * j'utilise Map.entityCells pour les cases non accessibles (ou il y a tout le monde sauf self)
+	 * FIXME maybe je devrais filtrer les entitiesIdToIgnore dans les entityCells ? genre si j'ignore qq
+	 * pour la los, je devrais aussi l'ignore dans les cases disponibles depuis lesquelles je devrais tirer,
+	 * puisque si il est pas la pour la los, il est pas là non plus si je veux me mettre à sa place pour tirer.
+	 * à voir selon les usages de cette fonction, actuellement je ne traite pas le tour les bulbes,
+	 * et j'ai pas encore de modèle pour gérer les kills/déplacement d'entity en cours de tour.
+	 * @param item Arme ou Puce de l'entité
+	 * @param cell cellule ciblé par l'entité
+	 * @param entitiesIdToIgnore array of id for lineOfSight()
+	 * @return un tableau de cellules 
+	 */
+	static Array<Cell> getCellsToUseItemOnCell(Item item, Cell cell, Array<integer> entitiesIdToIgnore){
+		if (Targets.launchType[item.launchType] == null) {
+			debugE("Unhandled launchType in Targets " + item.launchType)
+			return []
+		}
+		return (Targets.launchType[item.launchType]!)(item, cell, entitiesIdToIgnore, false)
+	}
+	
+	static Map<integer, Function<Item, Cell, Array<integer>, boolean => Array<Cell>>> launchType = [
+		LAUNCH_TYPE_LINE: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			Array<Cell> result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]) {
+				if (abs(cell.x-x) < item.minRange) continue;
+				Cell? fromCell = Board.getCell(getCellFromXY(x, cell.y))
+				if(fromCell!=null 
+				&& Board.obstacles[fromCell!]==null 
+				&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+				&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))) {
+					push(result, fromCell)
+				}
+			}
+			for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]) {
+				if(abs(cell.y-y) < item.minRange) continue;
+				Cell? fromCell = Board.getCell(getCellFromXY(cell.x, y))
+				if(fromCell!=null
+				&& Board.obstacles[fromCell!]==null 
+				&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+				&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+					push(result, fromCell)
+				}
+			}
+			return result
+		},
+		LAUNCH_TYPE_DIAGONAL: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			Array<Cell> result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]){
+				for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]){
+					if( abs(cell.x-x) != abs(cell.y-y) ) continue; // si je suis pas sur une diagonale, skip
+					integer dist = abs(cell.x-x) + abs(cell.y-y)
+					if(dist > item.maxRange || dist < item.minRange) continue;
+					Cell? fromCell = Board.getCell(getCellFromXY(x, y))
+					if(fromCell!=null 
+					&& Board.obstacles[fromCell!]==null 
+					&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+					&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+						push(result, fromCell)
+					}
+				}
+			}
+			return result
+		},
+		LAUNCH_TYPE_STAR: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			var result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]){
+				for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]){
+					if( abs(cell.x-x) != abs(cell.y-y) // si je suis pas sur une diagonale
+					   && (x != cell.x) // et pas en ligne avec x
+					   && (y != cell.y) // et pas en ligne avec y
+					   ) continue; // skip
+					integer dist = abs(cell.x-x) + abs(cell.y-y)
+					if(dist > item.maxRange || dist < item.minRange) continue;
+					Cell? fromCell = Board.getCell(getCellFromXY(x, y))
+					if(fromCell!=null 
+					&& Board.obstacles[fromCell!]==null 
+					&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+					&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+						push(result, fromCell)
+					}
+				}
+			}
+			return result
+		},
+		LAUNCH_TYPE_STAR_INVERTED: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			var result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]){
+				for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]){
+					if( abs(cell.x-x) == abs(cell.y-y) // si je suis sur une diagonale
+					   || (x == cell.x) // ou en ligne avec x
+					   || (y == cell.y) // ou en ligne avec y
+					   ) continue; // skip
+					integer dist = abs(cell.x-x) + abs(cell.y-y)
+					if(dist > item.maxRange || dist < item.minRange) continue;
+					Cell? fromCell = Board.getCell(getCellFromXY(x, y))
+					if(fromCell!=null 
+					&& Board.obstacles[fromCell!]==null 
+					&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+					&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+						push(result, fromCell)
+					}
+				}
+			}
+			return result
+		},
+		LAUNCH_TYPE_DIAGONAL_INVERTED: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			var result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]){
+				for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]){
+					if( abs(cell.x-x) == abs(cell.y-y) ) continue; // si je suis sur une diagonale, skip
+					integer dist = abs(cell.x-x) + abs(cell.y-y)
+					if(dist > item.maxRange || dist < item.minRange) continue;
+					Cell? fromCell = Board.getCell(getCellFromXY(x, y))
+					if(fromCell!=null 
+					&& Board.obstacles[fromCell!]==null 
+					&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+					&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+						push(result, fromCell)
+					}
+				}
+			}
+			return result
+		},
+		LAUNCH_TYPE_LINE_INVERTED: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			var result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]){
+				for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]){
+					if( (x == cell.x) // si je suis en ligne avec x
+					   || (y == cell.y) // ou en ligne avec y
+					   ) continue // skip
+					integer dist = abs(cell.x-x) + abs(cell.y-y)
+					if(dist > item.maxRange || dist < item.minRange) continue;
+					Cell? fromCell = Board.getCell(getCellFromXY(x, y))
+					if(fromCell!=null 
+					&& Board.obstacles[fromCell!]==null 
+					&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+					&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+						push(result, fromCell)
+					}
+				}
+			}
+			return result
+		},
+		LAUNCH_TYPE_CIRCLE: (Item item, Cell cell, Array<integer> entitiesIdToIgnore, boolean shouldReturnOccupiedCells) => Array<Cell> {
+			var result = []
+			for(integer x in [cell.x-item.maxRange..cell.x+item.maxRange]){
+				for(integer y in [cell.y-item.maxRange..cell.y+item.maxRange]){
+					integer dist = abs(cell.x-x) + abs(cell.y-y)
+					if(dist > item.maxRange || dist < item.minRange) continue;
+					Cell? fromCell = Board.getCell(getCellFromXY(x, y))
+					if(fromCell!=null 
+					&& Board.obstacles[fromCell!]==null 
+					&& (shouldReturnOccupiedCells || Board.entityCells[fromCell!]==null)
+					&& (!item.needLOS || lineOfSight(fromCell!.id, cell.id, entitiesIdToIgnore))){
+						push(result, fromCell)
+					}
+				}
+			}
+			return result
+		}
+	];
+
+	// la fonction getTargetableCells est quasi identique à getCellsToUse, à la différence qu'elle considère une case occupé comme ciblable (puisque je veux savoir si on peut tirer dessus), alors que getCellsToUse considère une case occupé comme non disponible (puisqu'on est censé y aller pour tirer sur la cible)
+	// je pourrais ptete fusionner les deux fonctions pour limiter la duplication du code
+	// mais en même temps, c'est une distinction qui me semble pas anodine... je laisse les deux pour le moment
+	// on verra plus tard si je prend une décision
+	static Array<Cell> getTargetableCells(Item item, Cell cell, Array<integer> entitiesIdToIgnore){
+		if (Targets.launchType[item.launchType] == null) {
+			debugE("Unhandled launchType in Targets " + item.launchType)
+			return []
+		}
+		return (Targets.launchType[item.launchType]!)(item, cell, entitiesIdToIgnore, true)
+	}
+
+}

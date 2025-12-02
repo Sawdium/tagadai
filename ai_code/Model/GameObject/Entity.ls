@@ -1,0 +1,225 @@
+/*
+ * L'objet Entity contient la synthèse des informations d'une entité allié ou adversaire.
+ * Il y a un objet Entity instancié pour chacune des entités présente sur le champ de bataille.
+ */
+class Entity {
+	integer id
+	string name
+	Cell cell
+	// stats
+	integer totalLife
+	integer life
+	integer pwr
+	integer str
+	integer mgc
+	integer wsd
+	integer rst
+	integer agi
+	integer snc
+	integer tp
+	integer mp
+	integer relShield
+	integer absShield
+	integer dmgReturn
+	// déplacement
+	Map<Cell, integer> reachableCells
+	// inventaire organisé en fonction des cibles
+	Array<Item> items
+	Array<Item> offensiveItems // will have a value on enemy leeks only
+	Map<Entity, Array<Item>> offensiveItemsByTargets = [:] // will have a value on ally leeks only
+	// play order
+	integer turnOrder
+	Array<Entity> entitiesWhoPlayBefore
+	Array<Cell> cellsToIgnore = []
+	// booleans
+	boolean isFriend
+	boolean isBulb
+	// gestions des effets
+	Array<EntityEffect> effects = []
+	Map<Item, Array<EffectOverTime>> items_effectOverTime = [:]
+	integer psnTurn = 0
+	integer psnTotal = 0
+	integer psnlife
+	integer altStr = 0
+	integer altMgc = 0
+	integer altAgi = 0
+	integer altTP = 0
+	integer altMP = 0
+	// todo add more alt ?
+	// todo add passive effect
+	Array<EntityEffect> launchedEffects
+	
+	constructor(integer id){
+		this.id = id
+		this.name = getName(id)!
+		this.cell = Board.getCell(getCell(id))!
+		this.totalLife = getTotalLife(id)!
+		this.life = getLife(id)!
+		this.pwr = getPower(id)!
+		this.str = getStrength(id)!
+		this.mgc = getMagic(id)!
+		this.wsd = getWisdom(id)!
+		this.rst = getResistance(id)!
+		this.agi = getAgility(id)!
+		this.snc = getScience(id)!
+		this.tp = getTP(id)!
+		this.mp = getMP(id)!
+		this.relShield = getRelativeShield(id)!
+		this.absShield = getAbsoluteShield(id)!
+		this.dmgReturn = getDamageReturn(id)!
+		this.items = Items.getItems(id)
+		this.turnOrder = getEntityTurnOrder(id)!
+		this.isFriend = isAlly(id)
+		this.isBulb = isSummon(id)!
+		/*
+		this.launchedEffects = []
+		for(var e in getLaunchedEffects(id)){
+			push(this.launchedEffects, 
+		}
+		*/
+		
+		for(Array<boolean|integer> e in getEffects(id)!){
+			EntityEffect effect = EntityEffect(e)
+			push(effects, effect)
+			if(!this.items_effectOverTime[effect.item]) this.items_effectOverTime[effect.item] = []
+			push(this.items_effectOverTime[effect.item]!, EffectOverTime(effect))
+			// piste d'optimisation en ayant une meilleure structure pour les effets ici ?
+			// les eval en dessous pourrait être déléguer à un tab pour éviter les ifelseif?
+			// et ptete ajouter d'autres alt pour les autres stats ?
+			if(effect.type == EFFECT_POISON){
+				this.psnTurn+= effect.value
+				this.psnTotal+= effect.value * effect.turns
+			}else if(effect.type == EFFECT_HEAL){
+				this.psnTurn+= -effect.value
+				this.psnTotal+= -effect.value * effect.turns
+			}else if(effect.type == EFFECT_SHACKLE_STRENGTH){
+				this.altStr += -effect.value;
+			//	}else if(effect.type == EFFECT_SHACKLE_MAGIC){
+			//		this.altMgc -= value;
+			}else if(effect.type == EFFECT_SHACKLE_TP){
+				this.altTP += -effect.value;
+			}else if(effect.type == EFFECT_SHACKLE_MP){
+				this.altMP += -effect.value;
+			}else if(effect.type == EFFECT_BUFF_STRENGTH || effect.type == EFFECT_RAW_BUFF_STRENGTH){
+				this.altStr += effect.value;
+			}else if(effect.type == EFFECT_BUFF_TP || effect.type == EFFECT_RAW_BUFF_TP){
+				this.altTP += effect.value;
+			}else if(effect.type == EFFECT_BUFF_MP || effect.type == EFFECT_RAW_BUFF_MP){
+				this.altMP += effect.value;
+			}else if(effect.type == EFFECT_BUFF_AGILITY || effect.type == EFFECT_RAW_BUFF_AGILITY){
+				this.altAgi += effect.value;
+			}
+		}
+		this.psnlife= this.life-this.psnTurn
+	}
+
+	/*
+	 * Initialise certaines informations de l'objet Entity
+	 * Certaines peuvent être dépendantes d'autres classes.
+	 */
+	void init(){
+		this.entitiesWhoPlayBefore = Fight.getEntitiesWhoPlayBefore(this)
+		for(Entity entity in this.entitiesWhoPlayBefore) {
+			push(this.cellsToIgnore, entity.cell)
+		}
+		this.reachableCells = MapPath.getCachedReachableCells(
+			this.cell,
+			this.mp,
+			this.cellsToIgnore
+		)
+	}
+	
+	/*
+	 * Retourne l'objet Item correspondant à l'arme dans les mains de l'entité
+	 * @return une Item
+	 */
+	Item? getWeaponInHand(){
+		return Items.getItem(getWeapon(this.id))
+	}
+	
+	// n'est used que pour check les !stackable item, d'où le count(-1) et [0], maybe rename pour préciser ?
+	EffectOverTime? getCurrentItemEffect(Item item, Consequences? consequences){
+		if(consequences && consequences!._altEffects[this] && consequences!._altEffects[this]![item]){
+			return consequences!._altEffects[this]![item]![count(consequences!._altEffects[this]![item]!)-1]
+		}
+		return this.items_effectOverTime[item] ? this.items_effectOverTime[item]![0] : null
+	}
+	
+	integer getCurrentMaxHP(Consequences? consequences){
+		return consequences ? this.totalLife+consequences!.getAlteration(this, Stats.HPMAX) : this.totalLife 
+	}
+	integer getCurrentHP(Consequences? consequences){
+		return consequences ? this.life+consequences!.getAlteration(this, Stats.HP) : this.life 
+	}
+	integer getCurrentHPMissing(Consequences? consequences){
+		return this.getCurrentMaxHP(consequences) - this.getCurrentHP(consequences) 
+	}
+	integer getCurrentTP(Consequences? consequences){
+		return consequences ? this.tp+consequences!.getAlteration(this, Stats.TP) : this.tp 
+	}
+	integer getCurrentMP(Consequences? consequences){
+		return consequences ? this.mp+consequences!.getAlteration(this, Stats.MP) : this.mp 
+	}
+	integer getCurrentStr(Consequences? consequences){
+		return consequences ? this.str+consequences!.getAlteration(this, Stats.STR) : this.str 
+	}
+	integer getCurrentMgc(Consequences? consequences){
+		return consequences ? this.mgc+consequences!.getAlteration(this, Stats.MGC) : this.mgc 
+	}
+	integer getCurrentPwr(Consequences? consequences){
+		return consequences ? this.pwr+consequences!.getAlteration(this, Stats.PWR) : this.pwr 
+	}
+	integer getCurrentWsd(Consequences? consequences){
+		return consequences ? this.wsd+consequences!.getAlteration(this, Stats.WSD) : this.wsd 
+	}
+	integer getCurrentRst(Consequences? consequences){
+		return consequences ? this.rst+consequences!.getAlteration(this, Stats.RST) : this.rst 
+	}
+	integer getCurrentAgi(Consequences? consequences){
+		return consequences ? this.agi+consequences!.getAlteration(this, Stats.AGI) : this.agi 
+	}
+	integer getCurrentSnc(Consequences? consequences){
+		return consequences ? this.snc+consequences!.getAlteration(this, Stats.SNC) : this.snc 
+	}
+	integer getCurrentAbs(Consequences? consequences){
+		return consequences ? this.absShield+consequences!.getAlteration(this, Stats.ABSSHIELD) : this.absShield 
+	}
+	integer getCurrentRel(Consequences? consequences){
+		return consequences ? this.relShield+consequences!.getAlteration(this, Stats.RELSHIELD) : this.relShield
+	}
+	integer getCurrentDmgReturn(Consequences? consequences){
+		return consequences ? this.dmgReturn+consequences!.getAlteration(this, Stats.DMGRETURN) : this.dmgReturn
+	}
+	
+	/*
+	 * Actualise les informations de l'entité
+	 * FIXME: UNUSED FUNCTION
+	 */
+	void refresh() {
+		// TODO make a real full refresh based on consequences? might be used for bulb?
+		// OR delete this shit ? full refresh by instantiating the entity again, and replacing it in Fight ?
+		this.mp = getMP(this.id)!
+		this.cell = Board.getCell(getCell(this.id))!
+		this.reachableCells = MapPath.getCachedReachableCells(
+			this.cell,
+			this.mp,
+			this.cellsToIgnore
+		)
+	}
+
+	/*
+	 * Format chaîne de caracteres utilisée pour des tests / debugs.
+	 */
+	string string() {
+		return "<Entity "+this.name+">"
+	}
+}
+
+// TODO
+
+	//scoreLibe: scoreLibe
+	//nbBulbs: count(bulbs)//todo check si ça vaut le coup de garder cette info..
+	//bulbs: @bulbs
+	//antidoteCD: inArray(getChips(leek), CHIP_ANTIDOTE) ? getCooldown(CHIP_ANTIDOTE) : 5
+	//liberationCD: inArray(getChips(leek), CHIP_LIBERATION) ? getCooldown(CHIP_LIBERATION) : 6
+	//canJump: inArray(getChips(leek), CHIP_JUMP) && getCooldown(CHIP_JUMP, leek)<=1

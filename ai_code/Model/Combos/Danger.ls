@@ -1,0 +1,25 @@
+/*
+ * L'objet Danger contient un combo représentant un ensemble d'actions et les dommages approximatifs de ces actions.
+ * Le combo est une chaîne de caractères et est utilisé à des fins de tests / debugs.
+ */
+class Danger{
+	Cell cell
+	real dmg
+	string combo
+	real score
+	constructor(Cell cell, real dmg, string str, Consequences? consequences){
+		this.cell = cell
+		this.dmg = dmg
+		this.combo = str
+		this.score = -dmg // je souhaite le min de dmg, à raison de -1score par dmg, == dmg dealt pour le moment
+		if(dmg >= Fight.self.getCurrentHP(consequences)) // TODO gérer les conséquences de heal dans le danger ?
+			this.score += Scoring.DEATH_VALUE
+	}
+	
+	/*
+	 * Format chaîne de caracteres utilisée pour des tests / debugs.
+	 */
+	string string() {
+		return '<Danger '+this.cell+':'+round(this.dmg)+':'+this.combo+'>'
+	}
+}

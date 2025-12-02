@@ -1,0 +1,111 @@
+class TargetType {
+	boolean enemies = false
+	boolean allies = false
+	
+	boolean onEmpty = false
+	boolean onBulbs = false // FIXME le nomage bulb/leek pu, summon/notsummon est très moche, maybe summon/primary ?
+	boolean onLeeks = false
+	boolean onCaster = false
+	// TODO when onCaster, peut justifier des cibles autres que celle normalement autorisé par les types d'effet
+	// exemple broadsword / j_lazer
+	// TODO target empty cell for item that target nothing : summon, resu, teleport, broadsword to selfboost, etc... ?
+
+	// ALLIES et ENEMIES permettent de définir un effet positif ou négatif, et sont utilisés pour savoir
+	// si la value d'un entityEffect doit être négative ou positive
+	static integer ENEMIES = -1
+	static integer ALLIES = 1
+	static integer ALL = 2
+	static integer EMPTY = 3
+	
+	static Map<integer, integer> CONVERTER = [
+		EFFECT_DAMAGE: 					TargetType.ENEMIES,
+		EFFECT_POISON: 					TargetType.ENEMIES,
+		EFFECT_NOVA_DAMAGE:				TargetType.ENEMIES,
+		EFFECT_LIFE_DAMAGE: 			TargetType.ENEMIES,
+		EFFECT_VULNERABILITY: 			TargetType.ENEMIES,
+		EFFECT_ABSOLUTE_VULNERABILITY: 	TargetType.ENEMIES,
+		EFFECT_KILL: 					TargetType.ENEMIES,
+		EFFECT_SHACKLE_AGILITY:			TargetType.ENEMIES,
+		EFFECT_SHACKLE_WISDOM:			TargetType.ENEMIES,
+		EFFECT_SHACKLE_MAGIC:			TargetType.ENEMIES,
+		EFFECT_SHACKLE_STRENGTH:		TargetType.ENEMIES,
+		EFFECT_SHACKLE_MP:				TargetType.ENEMIES,
+		EFFECT_SHACKLE_TP:				TargetType.ENEMIES,
+		// présent uniquement sur un item de boost réservé aux allys, mais c'est un effet négatif
+		// et j'utilise ça pour valuer libération... 
+		// tant pis pour les économies d'opés en mettant ça sur allies, au moins mon code est cohérent..
+		EFFECT_AFTEREFFECT: 			TargetType.ENEMIES,
+		// présent uniquement sur covid, TODO .ALL target si on code bien ensuite ;)
+		EFFECT_PROPAGATION:				TargetType.ENEMIES,
+		
+		EFFECT_ANTIDOTE: 				TargetType.ALLIES,
+		EFFECT_REMOVE_SHACKLES: 		TargetType.ALLIES,
+		EFFECT_HEAL: 					TargetType.ALLIES,
+		EFFECT_BOOST_MAX_LIFE: 			TargetType.ALLIES,
+		EFFECT_RAW_ABSOLUTE_SHIELD: 	TargetType.ALLIES,
+		EFFECT_RAW_BUFF_AGILITY: 		TargetType.ALLIES,
+		EFFECT_RAW_BUFF_MAGIC: 			TargetType.ALLIES,
+		EFFECT_RAW_BUFF_MP: 			TargetType.ALLIES,
+		EFFECT_RAW_BUFF_RESISTANCE: 	TargetType.ALLIES,
+		EFFECT_RAW_BUFF_SCIENCE: 		TargetType.ALLIES,
+		EFFECT_RAW_BUFF_STRENGTH: 		TargetType.ALLIES,
+		EFFECT_RAW_BUFF_TP: 			TargetType.ALLIES,
+		EFFECT_RAW_BUFF_WISDOM: 		TargetType.ALLIES,
+		EFFECT_BUFF_AGILITY: 			TargetType.ALLIES,
+		EFFECT_BUFF_MP: 				TargetType.ALLIES,
+		EFFECT_BUFF_RESISTANCE: 		TargetType.ALLIES,
+		EFFECT_BUFF_STRENGTH: 			TargetType.ALLIES,
+		EFFECT_BUFF_TP: 				TargetType.ALLIES,
+		EFFECT_BUFF_WISDOM: 			TargetType.ALLIES,
+		EFFECT_ABSOLUTE_SHIELD: 		TargetType.ALLIES,
+		EFFECT_RELATIVE_SHIELD: 		TargetType.ALLIES,
+		EFFECT_DAMAGE_RETURN: 			TargetType.ALLIES,
+		EFFECT_NOVA_VITALITY: 			TargetType.ALLIES,
+		EFFECT_REMOVE_SHACKLES: 		TargetType.ALLIES,
+		
+		
+		//
+		EFFECT_DEBUFF: 					TargetType.ALL,
+		
+		EFFECT_ATTRACT: 				TargetType.ALL,
+		EFFECT_INVERT: 					TargetType.ALL,
+		EFFECT_PUSH: 					TargetType.ALL,
+		
+		EFFECT_STEAL_ABSOLUTE_SHIELD:	TargetType.ALL,
+				
+		EFFECT_RESURRECT: 				TargetType.EMPTY, // FIXME ???
+		EFFECT_TELEPORT: 				TargetType.EMPTY,
+		EFFECT_SUMMON: 					TargetType.EMPTY
+	]
+
+	constructor(ItemEffect effect){
+		// THIS is the fact that effect does hit caster if in aoe (like CHIP_LIGHTNING is false)
+		if(effect.targets & EFFECT_TARGET_CASTER) this.onCaster = true;
+		
+		
+		integer tt = TargetType.CONVERTER[effect.type]!
+		if(!tt) debugE('unhandled type in TargetType on effect: ' + effect)
+		if(tt == TargetType.ENEMIES) this.enemies = true
+		else if(tt == TargetType.ALLIES) this.allies = true
+		else if(tt == TargetType.ALL){
+			this.enemies = true
+			this.allies = true
+		}else if(tt == TargetType.EMPTY){
+			this.onEmpty = true
+		}else{
+			// else everything should be on false for .NONE
+			debugE("Strange behavior in TargetType, should never get there")
+		}
+		
+		
+
+		if(!(effect.targets & EFFECT_TARGET_ALLIES)) this.allies = false
+		if(!(effect.targets & EFFECT_TARGET_ENEMIES)) this.enemies = false
+		if(effect.targets & EFFECT_TARGET_SUMMONS) this.onBulbs = true
+		if(effect.targets & EFFECT_TARGET_NON_SUMMONS) this.onLeeks = true
+	}
+	
+	string string(){
+		return "<TargetType ally:" + this.allies + " enemy:" + this.enemies + " leek:" + this.onLeeks + " bulb:" + this.onBulbs + " caster:" + this.onCaster + ">"
+	}
+}

@@ -1,0 +1,80 @@
+include('API/compatibility')
+
+include('Model/GameObject/Cell')
+include('Model/GameObject/Entity')
+include('Model/GameObject/EntityEffect')
+include('Model/GameObject/Item')
+include('Model/GameObject/ItemEffect')
+include('Model/GameObject/TargetType')
+
+include('Model/Const/Stats')
+
+include('Controlers/Fight')
+include('Controlers/Board')
+include('Controlers/Items')
+
+include('Controlers/Maps/MapPath')
+include('Controlers/Maps/MapDanger')
+//include('Controlers/Maps/MapPosition')
+include('Controlers/Maps/MapAction')
+
+//include('Model/Combos/Jump')
+include('Model/Combos/Danger')
+include('Model/Combos/Position')
+include('Model/Combos/Action')
+include('Model/Combos/Consequences')
+include('Model/Combos/Combo')
+include('Model/Combos/EffectOverTime')
+
+include('Services/Damages')
+include('Services/Targets')
+include('Services/Sort')
+include('Services/Benchmark')
+
+
+include('AI/Scoring')
+include('AI/AI')
+
+
+
+function init() {
+	Benchmark.start('init')
+	if(getTurn()==1) {
+		Benchmark.start('Map.init')
+		Board.init()
+		Benchmark.stop('Map.init')
+		
+		Benchmark.start('Items.init')
+		Items.init()
+		Benchmark.stop('Items.init')
+	}
+	Benchmark.start('MapPath.refresh')
+	MapPath.refresh()
+	Benchmark.stop('MapPath.refresh')
+	
+	Benchmark.start('Fight.refresh')
+	Fight.refresh()
+	Benchmark.stop('Fight.refresh')
+	
+	Benchmark.start('Map.refresh')
+	Board.refresh()
+	Benchmark.stop('Map.refresh')
+	
+	Benchmark.start('Scoring.refresh')
+	Scoring.refresh()
+	Benchmark.stop('Scoring.refresh')
+	
+	Benchmark.start('MapDanger.refresh')
+	MapDanger.refresh()
+	Benchmark.stop('MapDanger.refresh')
+	
+	//Benchmark.start('MapPosition.refresh')
+	//MapPosition.refresh()
+	//Benchmark.stop('MapPosition.refresh')
+	
+	Benchmark.start('MapAction.refresh')
+	MapAction.refresh()
+	Benchmark.stop('MapAction.refresh')
+			
+	Benchmark.stop('init')
+}

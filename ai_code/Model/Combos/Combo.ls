@@ -1,0 +1,126 @@
+/*
+ * Ensemble d'actions formant un combo 
+ * L'objet combo contient les dommages approximatifs calculé dans MapDanger::getPotentialCombo
+ */
+class Combo {
+	Array<Action> actions = []
+	Danger? finalDanger = null
+	real? score = null
+	
+	/*
+	 * Ajout d'action dans l'ensemble d'actions du combo
+	 * @param action Action a ajouter dans le combo
+	 */
+	boolean add(Action action){
+		if(count(this.actions) == 0) push(this.actions, action)
+		else {
+			Action actualized = Action(action, this.getCurrentConsequences())
+			if(actualized.score > 0) push(this.actions, actualized)
+			else return false
+		}
+		return true
+	}
+	
+	void addFinalDanger(Danger danger){
+		this.finalDanger = danger
+	}
+	
+	/*
+	 * retourne la somme des scores des actions du combo
+	 */
+	real? getScore(){
+		if(this.score == null){
+			for(Action action in this.actions){
+				this.score += action.score!
+			}
+			this.score += this.finalDanger!.score
+		}
+		return this.score
+	}
+	
+	/*
+	 * retourne la cell où on serait si on jouait le combo en l'état
+	 */
+	Cell getCurrentCell(){
+		Cell currentCell
+		if(this.finalDanger) currentCell = this.finalDanger!.cell
+		else if(count(this.actions)>0) currentCell = actions[count(this.actions)-1].from
+		else currentCell = Fight.self.cell
+
+		// TODO avoir la case de l'action d'avant jusqu'à avoir une vrai case ou Fight.self.cell si que selfcast
+		if(currentCell == Fight.selfCell) currentCell = Fight.self.cell
+		return currentCell
+	}
+	
+	/*
+	 * retourne la cell où on serait si on jouait le combo en l'état
+	 */
+	integer getCurrentMP(){
+		integer currentMP
+		if(this.finalDanger) currentMP = 0 // TODO avoir les mp restant dans un objet conséquences d'un placement!
+		else if(count(this.actions)>0) currentMP = actions[count(this.actions)-1].consequences.currentMP
+		else currentMP = Fight.self.mp
+
+		return currentMP
+	}
+	
+	/*
+	 * retourne la cell où on serait si on jouait le combo en l'état
+	 */
+	Consequences getCurrentConsequences(){
+		// TODO une fois qu'on aura des conseq dans le placement final, handle here !
+		if(count(this.actions)>0) return actions[count(this.actions)-1].consequences
+		else return Consequences()
+	}
+	
+	/*
+	 * retourne les reachableCells atteignable depuis l'emplacement actuel du combo
+	 */
+	Map<Cell, integer> getCurrentReachableCells(){
+		Cell currentCell = this.getCurrentCell()
+		integer currentMP = this.getCurrentMP()
+		Array<Cell> ignoreCells = Fight.self.cellsToIgnore
+		for(Entity e in this.getCurrentConsequences()._killed){
+			push(ignoreCells, e.cell)
+		}
+		return MapPath.getCachedReachableCells(currentCell, currentMP, Fight.self.cellsToIgnore)
+	}
+	
+	/*
+	 * pour chaque action dans l'ensemble d'actions
+	 * on se déplace a l'emplacement définis dans la génération de l'action et on éxécute l'Item sur la cible définis.
+	 */
+	void play(){
+		// debug(this)
+		// étape 1: je fais mes actions
+		for(Action action in this.actions){
+			debug(action)
+			debug(action.consequences)
+			if(action.from != Fight.selfCell) moveTowardCell(action.from.id)
+			if(action.to == Fight.selfCell) action.item.useItemOnCell(Board.getCell(getCell())!)
+			else action.item.useItemOnCell(action.to)
+		}
+		// étape 2: je vais me planquer
+		if(this.finalDanger){
+			MapDanger.showDanger(Board.getCell(getCell())!, getMP(), this.getCurrentConsequences())
+			//debug(this.finalDanger)
+			moveTowardCell(this.finalDanger!.cell.id)
+		}
+		// étape 3: si il reste des TP, je prend en main la meilleure arme vis à vis de la situation
+		if(getWeapon(Fight.self.id)==null) setWeapon(Items.getItem(WEAPON_DESTROYER)!.id)
+		// étape 4: si il reste des TP, je dis des trucs
+		// todo pipotron
+	}
+	
+	/*
+	 * Format chaîne de caractères utilisée pour des tests / debugs.
+	 */
+	string(){
+		string str= '<Combo: ['
+		for(Action action in this.actions){
+			str+= '\n'+action
+		}
+		str+= '\n'+this.finalDanger+']>'
+		return str
+	}
+}
