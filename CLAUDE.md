@@ -20,7 +20,7 @@ tagadai/
 ├── src/
 │   └── tools/                # CLI tools for interacting with LeekWars
 │       ├── status.py         # Account status display
-│       ├── testfight.py      # Run test fights against Domingo
+│       ├── fight.py          # Run fights (test or real)
 │       └── aisync.py         # Upload/download AI code
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # REFERENCE ONLY - LeekScript v1 combat AI
@@ -75,14 +75,16 @@ python -m src.tools.status --json   # JSON output for programmatic use
 ```
 Shows: farmer name, talent, habs, fights available, leeks (with levels/talent/capital), AI files.
 
-### Test Fight
+### Fight
 ```bash
-python -m src.tools.testfight                    # Run test fight vs Domingo (free, no fight cost)
-python -m src.tools.testfight --json             # Output raw fight JSON
-python -m src.tools.testfight --real             # Run REAL solo fight (uses fight count)
-python -m src.tools.testfight --real --farmer    # Run REAL farmer fight
+python -m src.tools.fight                    # Test fight vs Domingo (FREE - use this for testing!)
+python -m src.tools.fight --json             # Output raw fight JSON
+python -m src.tools.fight --real             # REAL solo fight (costs 1 fight)
+python -m src.tools.fight --real --farmer    # REAL farmer fight (costs 1 fight)
 ```
 Outputs fight summary: winner, damage dealt/received, turn-by-turn breakdown.
+
+**Always prefer test fights** (no `--real` flag) when testing AI code - they're free and unlimited.
 
 ### AI Code Sync
 ```bash

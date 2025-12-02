@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Test Fight Tool - Run a test fight against Domingo and analyze results.
+Fight Tool - Run fights and analyze results.
+
+Default: Test fight vs Domingo (FREE, no fight cost) - use this for testing AI code!
 
 Usage:
-    python -m src.tools.testfight                    # Run test fight vs Domingo (default)
-    python -m src.tools.testfight --real             # Run real solo fight (uses fight count)
-    python -m src.tools.testfight --real --farmer    # Run real farmer fight
-    python -m src.tools.testfight --json             # Output raw JSON
-    python -m src.tools.testfight --strategy worst   # Pick weakest opponent for real fights
+    python -m src.tools.fight                    # Test fight vs Domingo (default, FREE)
+    python -m src.tools.fight --real             # Real solo fight (COSTS 1 fight)
+    python -m src.tools.fight --real --farmer    # Real farmer fight (COSTS 1 fight)
+    python -m src.tools.fight --json             # Output raw JSON
+    python -m src.tools.fight --strategy worst   # Pick weakest opponent for real fights
 """
 
 import os
