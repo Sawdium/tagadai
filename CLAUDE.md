@@ -15,6 +15,13 @@ This project creates an autonomous AI system for LeekWars, a browser-based progr
 ```
 tagadai/
 ├── CLAUDE.md                 # This file - project guidelines
+├── docs/
+│   └── LEEKWARS_API.md       # Complete API reference (extracted from source)
+├── src/
+│   └── tools/                # CLI tools for interacting with LeekWars
+│       ├── status.py         # Account status display
+│       ├── testfight.py      # Run test fights against Domingo
+│       └── aisync.py         # Upload/download AI code
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # REFERENCE ONLY - LeekScript v1 combat AI
 │   ├── AI/                   # Decision engine & scoring
@@ -22,11 +29,6 @@ tagadai/
 │   ├── Controlers/           # Fight logic, pathfinding, danger maps
 │   ├── Services/             # Damage calc, targeting, benchmarks
 │   └── main                  # Entry point
-├── src/                      # Main source code (to be created)
-│   ├── api/                  # LeekWars API client
-│   ├── analyzer/             # Fight result analysis
-│   ├── generator/            # AI code generation
-│   └── core/                 # Orchestration and learning loop
 ├── ai_code/                  # Generated LeekScript AI files
 ├── data/                     # Fight history, analysis results
 └── tests/                    # Test suite
@@ -62,7 +64,40 @@ Sophisticated combat AI written in **LeekScript v1** (~77 files, modular archite
 
 **Never edit these files** - preserved as reference for AI strategies
 
+## CLI Tools
+
+Python tools in `src/tools/` for interacting with LeekWars. Run from project root.
+
+### Account Status
+```bash
+python -m src.tools.status          # Human-readable account overview
+python -m src.tools.status --json   # JSON output for programmatic use
+```
+Shows: farmer name, talent, habs, fights available, leeks (with levels/talent/capital), AI files.
+
+### Test Fight
+```bash
+python -m src.tools.testfight                    # Run test fight vs Domingo (free, no fight cost)
+python -m src.tools.testfight --json             # Output raw fight JSON
+python -m src.tools.testfight --real             # Run REAL solo fight (uses fight count)
+python -m src.tools.testfight --real --farmer    # Run REAL farmer fight
+```
+Outputs fight summary: winner, damage dealt/received, turn-by-turn breakdown.
+
+### AI Code Sync
+```bash
+python -m src.tools.aisync list                  # List all AI files with IDs
+python -m src.tools.aisync get <ai_id>           # Download AI code to stdout
+python -m src.tools.aisync get <ai_id> -o f.ls   # Download AI code to file
+python -m src.tools.aisync put <ai_id> <file>    # Upload code from file
+python -m src.tools.aisync put <ai_id> -         # Upload code from stdin
+python -m src.tools.aisync new <name>            # Create new AI file
+python -m src.tools.aisync rename <ai_id> <name> # Rename AI file
+```
+
 ## LeekWars API Reference
+
+> **Full API documentation**: See [docs/LEEKWARS_API.md](docs/LEEKWARS_API.md) for complete endpoint reference.
 
 ### Base URL
 ```
@@ -348,6 +383,7 @@ common_loss_patterns = []
 
 ## Key Resources
 
+- **[docs/LEEKWARS_API.md](docs/LEEKWARS_API.md)** - Complete local API reference (use this first!)
 - [LeekWars Official](https://leekwars.com/)
 - [API Documentation](https://leekwars.com/help/api)
 - [LeekScript Docs](https://leekwars.com/help/documentation)
