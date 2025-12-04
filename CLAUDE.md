@@ -23,13 +23,14 @@ tagadai/
 │       ├── fight.py          # Run fights (test or real)
 │       └── aisync.py         # Upload/download AI code
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
-├── tagadalive/               # REFERENCE ONLY - LeekScript v1 combat AI
+├── tagadalive/               # ACTIVE AI DEVELOPMENT - LeekScript v4 combat AI
 │   ├── AI/                   # Decision engine & scoring
 │   ├── Model/                # Entity, Item, Cell, Combo classes
 │   ├── Controlers/           # Fight logic, pathfinding, danger maps
 │   ├── Services/             # Damage calc, targeting, benchmarks
+│   ├── TESTS/                # AI unit tests
+│   ├── TODO.md               # Static analysis issues tracker
 │   └── main                  # Entry point
-├── ai_code/                  # Generated LeekScript AI files
 ├── data/                     # Fight history, analysis results
 └── tests/                    # Test suite
 ```
@@ -45,24 +46,33 @@ Python tool for automating LeekWars account management. Use as **reference only*
 - `utils.py` - Constants and data structures
 - **Never edit these files**
 
-#### tagadalive/
-Sophisticated combat AI written in **LeekScript v1** (~77 files, modular architecture). This is your own old codebase - use as **AI strategy reference**:
+## Active AI Development
+
+### tagadalive/
+Combat AI written in **LeekScript v4** (~30 core files, modular architecture). This is the active codebase for AI development:
+
+**Core files**:
 - `main` - Entry point, decision loop
 - `AI/AI` - Core strategy: greedy multi-position search with consequence prediction
-- `AI/Scoring` - Weighted coefficient system for action evaluation
+- `AI/Scoring` - Weighted coefficient system for action evaluation, duration caching
 - `Model/` - Entity, Item, Cell, Action, Combo classes
 - `Controlers/Maps/` - Pathfinding, danger maps, action generation
 - `Services/Damages` - Damage calculation with shields/erosion
 
 **Key patterns**: Consequence simulation, danger map caching, dual-phase exploration (offense vs offense+defense).
 
-**PR #5 "Migration LS4"** (by Kavaliov2, OPEN since July 2024): Proposes migration to LeekScript v4 with:
-- Full variable/method typing
-- Array vs Map distinction (renamed `Map` class to `Board`)
-- Removed native function overloading
-- **Status: UNTESTED** - validate before using
+**LeekScript v4 features used**:
+- Full variable/method typing (zero runtime cost - empirically tested)
+- Array vs Map distinction (`Board` class replaces old `Map`)
+- Typed function parameters and return types
+- Nullable types with `?` suffix and `!` force-unwrap
 
-**Never edit these files** - preserved as reference for AI strategies
+**Language notes**:
+- **LS4 null coercion**: `null` is coerced to `0` in numeric contexts (arithmetic, comparisons)
+- **Type annotations are FREE**: Empirically tested - zero runtime operation cost
+- Cell 1312 (`Cell.SELF_CAST_ID`) is sentinel for self-cast actions (outside valid range 0-612)
+
+**TODO.md**: Tracks static analysis issues and improvements
 
 ## CLI Tools
 
@@ -277,8 +287,13 @@ getWeaponMaxRange(weapon)    // Maximum range
 getChipCost(chip)            // TP cost for chip
 
 // Communication
-say(message)                 // Display message in fight
-debug(value)                 // Log to debug output (with ?logs=true)
+say(message)                 // Display message in fight (COSTS 1 TP - avoid!)
+debug(value)                 // Log to debug output (with ?logs=true) - FREE
+debugW(value)                // Warning level debug output - FREE
+debugE(value)                // Error level debug output - FREE
+
+// IMPORTANT: Always use debug() instead of say() for logging!
+// say() costs 1 action point per call, debug() is free.
 
 // Utility
 randInt(min, max)            // Random integer
@@ -412,15 +427,31 @@ common_loss_patterns = []
    password = os.getenv("LEEKWARS_PASSWORD")
    ```
 
-3. Study reference code:
+3. Study AI code:
    ```bash
-   # API patterns
-   cat leekwars_gardener/lwapi.py
-   # AI strategy patterns
+   # Main AI logic
    cat tagadalive/AI/AI
+   # Scoring system
+   cat tagadalive/AI/Scoring
+   # Static analysis issues
+   cat tagadalive/TODO.md
    ```
 
-4. Begin implementation (see src/ structure above)
+4. Sync AI code to/from LeekWars:
+   ```bash
+   # List AI files on account
+   python -m src.tools.aisync list
+   # Upload a file
+   python -m src.tools.aisync put <ai_id> tagadalive/<path>
+   # Download a file
+   python -m src.tools.aisync get <ai_id> -o tagadalive/<path>
+   ```
+
+5. Test AI changes:
+   ```bash
+   # Run FREE test fight vs Domingo
+   python -m src.tools.fight
+   ```
 
 ## TODO / Roadmap
 

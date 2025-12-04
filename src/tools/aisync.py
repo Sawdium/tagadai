@@ -10,6 +10,8 @@ Usage:
     python -m src.tools.aisync put <ai_id> -            # Upload code from stdin to AI
     python -m src.tools.aisync new <name> [folder_id]   # Create new AI file
     python -m src.tools.aisync rename <ai_id> <name>    # Rename AI file
+    python -m src.tools.aisync delete <ai_id>           # Delete AI file
+    python -m src.tools.aisync download <dir>           # Download all AI files to directory
 """
 
 import os
@@ -111,6 +113,17 @@ class LeekWarsAPI:
 
         return {"id": folder_id, "name": name}
 
+    def delete_ai(self, ai_id: int) -> dict:
+        """Delete an AI file."""
+        r = self.session.delete(
+            f"{self.BASE_URL}/ai/delete",
+            data={"ai_id": ai_id}
+        )
+        data = r.json()
+        if "error" in data:
+            raise Exception(f"Failed to delete AI: {data.get('error')}")
+        return data
+
 
 def cmd_list(api: LeekWarsAPI, args):
     """List all AI files."""
@@ -211,6 +224,90 @@ def cmd_rename(api: LeekWarsAPI, args):
     print(f"Renamed AI {args.ai_id} to '{args.name}'", file=sys.stderr)
 
 
+def cmd_mkdir(api: LeekWarsAPI, args):
+    """Create a folder."""
+    result = api.create_folder(args.name, args.parent_id)
+    print(f"Created folder '{result['name']}' with id:{result['id']}", file=sys.stderr)
+    print(result["id"])  # Output just the ID for scripting
+
+
+def cmd_delete(api: LeekWarsAPI, args):
+    """Delete an AI file."""
+    # Get the name first
+    data = api.get_farmer_ais()
+    name = None
+    for ai in data.get("ais", []):
+        if ai["id"] == args.ai_id:
+            name = ai["name"]
+            break
+
+    if not name:
+        raise Exception(f"AI {args.ai_id} not found")
+
+    api.delete_ai(args.ai_id)
+    print(f"Deleted AI '{name}' (id:{args.ai_id})", file=sys.stderr)
+
+
+def cmd_download(api: LeekWarsAPI, args):
+    """Download all AI files to a directory."""
+    from pathlib import Path
+    import time as time_module
+
+    output_dir = Path(args.directory)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    data = api.get_farmer_ais()
+
+    # Build folder map - handle nested folders properly
+    folders = {0: ""}
+    folder_list = data.get("folders", [])
+
+    # Sort folders by parent to ensure parents are processed first
+    for folder in sorted(folder_list, key=lambda f: f.get("folder", 0)):
+        parent = folder.get("folder", 0)
+        parent_path = folders.get(parent, "")
+        folders[folder["id"]] = f"{parent_path}/{folder['name']}" if parent_path else folder["name"]
+
+    # Download each AI with rate limiting
+    count = 0
+    errors = []
+    for ai in data.get("ais", []):
+        ai_id = ai["id"]
+        name = ai["name"]
+        folder_id = ai.get("folder", 0)
+        folder_path = folders.get(folder_id, "")
+
+        try:
+            # Get code
+            ai_data = api.get_ai(ai_id)
+            code = ai_data.get("ai", {}).get("code", "")
+
+            # Build output path
+            if folder_path:
+                file_path = output_dir / folder_path / f"{name}.ls"
+            else:
+                file_path = output_dir / f"{name}.ls"
+
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(code)
+
+            print(f"  {file_path}", file=sys.stderr)
+            count += 1
+
+            # Small delay to avoid rate limiting
+            time_module.sleep(0.1)
+
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+            print(f"  ERROR: {name} - {e}", file=sys.stderr)
+
+    print(f"Downloaded {count} files to {output_dir}", file=sys.stderr)
+    if errors:
+        print(f"Errors: {len(errors)}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Manage AI code files on LeekWars")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -240,6 +337,20 @@ def main():
     p_rename.add_argument("ai_id", type=int, help="AI ID to rename")
     p_rename.add_argument("name", help="New name")
 
+    # mkdir
+    p_mkdir = subparsers.add_parser("mkdir", help="Create folder")
+    p_mkdir.add_argument("name", help="Folder name")
+    p_mkdir.add_argument("parent_id", type=int, nargs="?", default=0,
+                         help="Parent folder ID (default: root)")
+
+    # delete
+    p_delete = subparsers.add_parser("delete", help="Delete AI file")
+    p_delete.add_argument("ai_id", type=int, help="AI ID to delete")
+
+    # download
+    p_download = subparsers.add_parser("download", help="Download all AI files")
+    p_download.add_argument("directory", help="Output directory")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -268,6 +379,12 @@ def main():
             cmd_new(api, args)
         elif args.command == "rename":
             cmd_rename(api, args)
+        elif args.command == "mkdir":
+            cmd_mkdir(api, args)
+        elif args.command == "delete":
+            cmd_delete(api, args)
+        elif args.command == "download":
+            cmd_download(api, args)
 
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)

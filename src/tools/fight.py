@@ -10,6 +10,9 @@ Usage:
     python -m src.tools.fight --real --farmer    # Real farmer fight (COSTS 1 fight)
     python -m src.tools.fight --json             # Output raw JSON
     python -m src.tools.fight --strategy worst   # Pick weakest opponent for real fights
+    python -m src.tools.fight --list             # List saved fight logs
+    python -m src.tools.fight --review <id>      # Review a saved fight by ID
+    python -m src.tools.fight --no-save          # Don't save fight to log
 """
 
 import os
@@ -18,9 +21,14 @@ import json
 import time
 import argparse
 import requests
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
+
+# Log directory for fight results
+FIGHT_LOG_DIR = Path(__file__).parent.parent.parent / "data" / "fights"
 
 
 # Action type constants (from fight logs)
@@ -29,6 +37,7 @@ ACTION_USE_WEAPON = 1
 ACTION_USE_CHIP = 2
 ACTION_NEW_TURN = 6
 ACTION_LEEK_TURN = 7
+ACTION_END_TURN = 8
 ACTION_MOVE_TO = 10
 ACTION_SET_WEAPON = 12
 ACTION_TP_LOST = 100
@@ -37,9 +46,27 @@ ACTION_MP_LOST = 102
 ACTION_LIFE_WIN = 103
 ACTION_STRENGTH_WIN = 104
 ACTION_SUMMON = 200
+ACTION_SAY = 203
+ACTION_DEBUG = 204      # debug() output
+ACTION_DEBUG_W = 205    # debugW() warning output
+ACTION_DEBUG_E = 206    # debugE() error output
 ACTION_DEATH = 210
 ACTION_ADD_EFFECT = 301
 ACTION_REMOVE_EFFECT = 302
+
+# Error action codes
+ACTION_ERROR_TOO_MANY_OPS = 1002  # AI interrupted: too many operations consumed
+ACTION_ERROR_TIMEOUT = 1003       # AI timeout
+ACTION_ERROR_EXCEPTION = 1004     # AI runtime exception
+
+# Error code descriptions
+ERROR_DESCRIPTIONS = {
+    1002: "AI interrupted: too many operations consumed",
+    1003: "AI timeout",
+    1004: "AI runtime exception",
+    1005: "AI stack overflow",
+    1006: "AI invalid operation",
+}
 
 
 class LeekWarsAPI:
@@ -180,7 +207,16 @@ class FightSummary:
     # Per-turn breakdown
     turns: list[dict]
 
-    # AI debug logs (if available)
+    # AI errors (e.g., too many operations, timeout)
+    errors: list[dict]
+
+    # AI say() messages
+    messages: list[str]
+
+    # AI debug(), debugW(), debugE() output
+    debug_output: list[dict]
+
+    # AI debug logs from API (if available)
     logs: list[str]
 
     # Raw data for deep analysis
@@ -268,6 +304,11 @@ def parse_fight(result: dict, our_farmer_id: int) -> FightSummary:
     current_turn = 0
     turns = []
     current_turn_data = {"turn": 0, "events": []}
+
+    # Track errors, messages, and debug output
+    errors = []
+    messages = []
+    debug_output = []
 
     for action in actions:
         if not action:
@@ -373,6 +414,30 @@ def parse_fight(result: dict, our_farmer_id: int) -> FightSummary:
                 "cells": cells_moved
             })
 
+        elif action_type == ACTION_SAY:
+            # say() message from AI
+            message = action[1] if len(action) > 1 else ""
+            messages.append(message)
+
+        elif action_type in (ACTION_DEBUG, ACTION_DEBUG_W, ACTION_DEBUG_E):
+            # debug(), debugW(), debugE() output
+            level = {ACTION_DEBUG: "debug", ACTION_DEBUG_W: "warn", ACTION_DEBUG_E: "error"}.get(action_type, "debug")
+            message = action[1] if len(action) > 1 else ""
+            debug_output.append({"level": level, "message": message, "turn": current_turn})
+
+        elif action_type in ERROR_DESCRIPTIONS:
+            # AI error occurred
+            leek_id = action[1] if len(action) > 1 else 0
+            leek = leeks.get(leek_id, {})
+            errors.append({
+                "type": action_type,
+                "description": ERROR_DESCRIPTIONS.get(action_type, f"Unknown error {action_type}"),
+                "leek": leek.get("name", f"#{leek_id}"),
+                "leek_id": leek_id,
+                "is_ours": leek_id in our_ids,
+                "turn": current_turn
+            })
+
     # Add last turn
     if current_turn_data["events"]:
         turns.append(current_turn_data)
@@ -395,6 +460,9 @@ def parse_fight(result: dict, our_farmer_id: int) -> FightSummary:
         enemy_team=enemy_team,
         enemy_damage_dealt=enemy_damage_dealt,
         turns=turns,
+        errors=errors,
+        messages=messages,
+        debug_output=debug_output,
         logs=logs,
         raw_actions=actions
     )
@@ -410,6 +478,15 @@ def format_summary(summary: FightSummary) -> str:
     result_emoji = "✓" if summary.we_won else ("=" if summary.winner == 0 else "✗")
     lines.append(f"FIGHT #{summary.fight_id} - {result_emoji} {result_str}")
     lines.append("=" * 70)
+
+    # AI ERRORS - show prominently at top!
+    if summary.errors:
+        lines.append("")
+        lines.append("!!! AI ERRORS !!!")
+        for err in summary.errors:
+            owner = "(OUR AI)" if err["is_ours"] else "(ENEMY)"
+            lines.append(f"  [{err['leek']}] {owner} Turn {err['turn']}: {err['description']}")
+        lines.append("")
 
     # Teams
     lines.append("")
@@ -444,7 +521,26 @@ def format_summary(summary: FightSummary) -> str:
         death_str = f" | Deaths: {', '.join(deaths)}" if deaths else ""
         lines.append(f"  T{turn_num:2d}: We dealt {our_dmg:4d}, took {their_dmg:4d}{death_str}")
 
-    # AI Debug logs
+    # AI say() messages
+    if summary.messages:
+        lines.append("")
+        lines.append("AI MESSAGES (say):")
+        for msg in summary.messages[:15]:  # Limit to first 15
+            lines.append(f"  {msg}")
+        if len(summary.messages) > 15:
+            lines.append(f"  ... ({len(summary.messages) - 15} more)")
+
+    # AI debug output (debug/debugW/debugE)
+    if summary.debug_output:
+        lines.append("")
+        lines.append("AI DEBUG OUTPUT:")
+        for dbg in summary.debug_output[:30]:  # Limit to first 30
+            prefix = {"debug": "  ", "warn": "W ", "error": "E "}.get(dbg["level"], "  ")
+            lines.append(f"  {prefix}[T{dbg['turn']}] {dbg['message']}")
+        if len(summary.debug_output) > 30:
+            lines.append(f"  ... ({len(summary.debug_output) - 30} more)")
+
+    # AI Debug logs from API
     if summary.logs:
         lines.append("")
         lines.append("AI DEBUG LOGS:")
@@ -459,6 +555,110 @@ def format_summary(summary: FightSummary) -> str:
     return "\n".join(lines)
 
 
+def save_fight_log(fight_id: int, result: dict, summary: FightSummary, is_test: bool = False):
+    """Save fight result to log directory."""
+    FIGHT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fight_type = "test" if is_test else "real"
+    filename = f"{timestamp}_{fight_id}_{fight_type}.json"
+
+    log_data = {
+        "fight_id": fight_id,
+        "timestamp": timestamp,
+        "type": fight_type,
+        "result": result,
+        "summary": {
+            "fight_id": summary.fight_id,
+            "winner": summary.winner,
+            "we_won": summary.we_won,
+            "total_turns": summary.total_turns,
+            "our_damage_dealt": summary.our_damage_dealt,
+            "our_damage_received": summary.our_damage_received,
+            "our_healing_done": summary.our_healing_done,
+            "errors": summary.errors,
+            "messages": summary.messages,
+            "debug_output": summary.debug_output,
+        }
+    }
+
+    log_path = FIGHT_LOG_DIR / filename
+    with open(log_path, "w") as f:
+        json.dump(log_data, f, indent=2)
+
+    print(f"Saved to: {log_path}", file=sys.stderr)
+    return log_path
+
+
+def list_fight_logs():
+    """List all saved fight logs."""
+    if not FIGHT_LOG_DIR.exists():
+        print("No fight logs found.")
+        return
+
+    logs = sorted(FIGHT_LOG_DIR.glob("*.json"), reverse=True)
+    if not logs:
+        print("No fight logs found.")
+        return
+
+    print(f"{'ID':>12}  {'Type':>6}  {'Result':>6}  {'Dmg':>6}  {'Rcv':>6}  {'Turns':>5}  Date")
+    print("-" * 70)
+
+    for log_path in logs[:20]:  # Show last 20
+        try:
+            with open(log_path) as f:
+                data = json.load(f)
+
+            fight_id = data.get("fight_id", "?")
+            fight_type = data.get("type", "?")
+            summary = data.get("summary", {})
+
+            result = "WIN" if summary.get("we_won") else ("DRAW" if summary.get("winner") == 0 else "LOSS")
+            dmg = summary.get("our_damage_dealt", 0)
+            rcv = summary.get("our_damage_received", 0)
+            turns = summary.get("total_turns", 0)
+            timestamp = data.get("timestamp", "?")
+
+            print(f"{fight_id:>12}  {fight_type:>6}  {result:>6}  {dmg:>6}  {rcv:>6}  {turns:>5}  {timestamp}")
+        except:
+            print(f"  (error reading {log_path.name})")
+
+    if len(logs) > 20:
+        print(f"  ... and {len(logs) - 20} more")
+
+
+def review_fight(fight_id: int, show_json: bool = False):
+    """Review a saved fight by ID."""
+    if not FIGHT_LOG_DIR.exists():
+        print("No fight logs found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Find log file with matching fight ID
+    for log_path in FIGHT_LOG_DIR.glob("*.json"):
+        if f"_{fight_id}_" in log_path.name:
+            with open(log_path) as f:
+                data = json.load(f)
+
+            if show_json:
+                print(json.dumps(data.get("result", {}), indent=2))
+            else:
+                # Re-parse and format (need farmer_id, but we can use 0 for display)
+                result = data.get("result", {})
+                # Try to get farmer_id from the data
+                farmer_id = 0
+                for leek in result.get("leeks1", []):
+                    if leek.get("farmer"):
+                        farmer_id = leek["farmer"]
+                        break
+
+                summary = parse_fight(result, farmer_id)
+                print(format_summary(summary))
+            return
+
+    print(f"Fight #{fight_id} not found in logs.", file=sys.stderr)
+    sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run a test fight and display results")
     parser.add_argument("--real", action="store_true", help="Run a real fight (uses fight count)")
@@ -468,7 +668,19 @@ def main():
     parser.add_argument("--strategy", choices=["worst", "best", "random"], default="worst",
                         help="Opponent selection for real fights (default: worst)")
     parser.add_argument("--json", action="store_true", help="Output raw fight JSON")
+    parser.add_argument("--list", action="store_true", help="List saved fight logs")
+    parser.add_argument("--review", type=int, metavar="ID", help="Review a saved fight by ID")
+    parser.add_argument("--no-save", action="store_true", help="Don't save fight to log")
     args = parser.parse_args()
+
+    # Handle --list and --review without needing credentials
+    if args.list:
+        list_fight_logs()
+        return
+
+    if args.review:
+        review_fight(args.review, show_json=args.json)
+        return
 
     load_dotenv()
     login = os.getenv("LEEKWARS_LOGIN")
@@ -539,10 +751,17 @@ def main():
         print(f"Fight #{fight_id} started, waiting for result...", file=sys.stderr)
         result = wait_for_fight(api, fight_id, is_test=is_test_fight)
 
+        # Parse the fight
+        summary = parse_fight(result, farmer_id)
+
+        # Save to log (unless --no-save)
+        if not args.no_save:
+            save_fight_log(fight_id, result, summary, is_test=is_test_fight)
+
+        # Output
         if args.json:
             print(json.dumps(result, indent=2))
         else:
-            summary = parse_fight(result, farmer_id)
             print(format_summary(summary))
 
     except Exception as e:
