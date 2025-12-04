@@ -398,6 +398,11 @@ common_loss_patterns = []
 - Use environment variables for secrets
 - Rate limit API calls responsibly
 
+### Git Commits
+- Do NOT include Claude references in commit messages (no "Generated with Claude", no "Co-Authored-By: Claude")
+- Write commit messages as if written by the developer
+- Keep messages concise and descriptive
+
 ## Key Resources
 
 - **[docs/LEEKWARS_API.md](docs/LEEKWARS_API.md)** - Complete local API reference (use this first!)
