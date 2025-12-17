@@ -123,6 +123,14 @@ class LeekWarsAPI:
         r = self.session.get(url)
         return r.json()
 
+    def get_fight_logs(self, fight_id: int) -> dict:
+        """Get debug logs for a fight (separate endpoint from fight data).
+
+        Returns logs indexed by farmer and action, containing debug(), debugW(), debugE() output.
+        """
+        r = self.session.get(f"{self.BASE_URL}/fight/get-logs/{fight_id}")
+        return r.json()
+
     def get_test_scenarios(self) -> dict:
         """Get all test scenarios."""
         r = self.session.get(f"{self.BASE_URL}/test-scenario/get-all")
@@ -149,6 +157,72 @@ class LeekWarsAPI:
         r = self.session.get(f"{self.BASE_URL}/ai/get-farmer-ais")
         return r.json()
 
+    # Test Scenario API methods
+    def create_test_scenario(self, name: str) -> dict:
+        """Create a new test scenario."""
+        r = self.session.post(f"{self.BASE_URL}/test-scenario/new", data={"name": name})
+        return r.json()
+
+    def update_test_scenario(self, scenario_id: int, scenario_type: int = 0, map_id: int = 0, seed: int = 0) -> dict:
+        """Update test scenario settings."""
+        r = self.session.post(f"{self.BASE_URL}/test-scenario/update", data={
+            "scenario_id": scenario_id,
+            "type": scenario_type,
+            "map": map_id,
+            "seed": seed
+        })
+        return r.json()
+
+    def delete_test_scenario(self, scenario_id: int) -> dict:
+        """Delete a test scenario."""
+        r = self.session.delete(f"{self.BASE_URL}/test-scenario/delete", data={"scenario_id": scenario_id})
+        return r.json()
+
+    def add_leek_to_scenario(self, scenario_id: int, leek_id: int, team: int, ai_id: int) -> dict:
+        """Add a leek to a test scenario.
+
+        Args:
+            team: 0 for team1, 1 for team2
+        """
+        r = self.session.post(f"{self.BASE_URL}/test-scenario/add-leek", data={
+            "scenario_id": scenario_id,
+            "leek": leek_id,
+            "team": team,
+            "ai": ai_id
+        })
+        return r.json()
+
+    def delete_leek_from_scenario(self, scenario_id: int, leek_id: int) -> dict:
+        """Remove a leek from a test scenario."""
+        r = self.session.delete(f"{self.BASE_URL}/test-scenario/delete-leek", data={
+            "scenario_id": scenario_id,
+            "leek": leek_id
+        })
+        return r.json()
+
+    def create_test_leek(self, name: str) -> dict:
+        """Create a new test leek."""
+        r = self.session.post(f"{self.BASE_URL}/test-leek/new", data={"name": name})
+        return r.json()
+
+    def update_test_leek(self, leek_id: int, leek_data: dict) -> dict:
+        """Update a test leek's stats.
+
+        Args:
+            leek_id: The test leek ID (negative number)
+            leek_data: Dict with leek properties to update (level, life, strength, etc.)
+        """
+        r = self.session.post(f"{self.BASE_URL}/test-leek/update", data={
+            "id": leek_id,
+            "data": json.dumps(leek_data)
+        })
+        return r.json()
+
+    def delete_test_leek(self, leek_id: int) -> dict:
+        """Delete a test leek."""
+        r = self.session.delete(f"{self.BASE_URL}/test-leek/delete", data={"leek_id": leek_id})
+        return r.json()
+
 
 def select_opponent(opponents: list, strategy: str) -> dict:
     """Select opponent based on strategy."""
@@ -168,11 +242,11 @@ def wait_for_fight(api: LeekWarsAPI, fight_id: int, timeout: int = 120, is_test:
     """Poll until fight is complete."""
     start = time.time()
     while time.time() - start < timeout:
-        # Test fights don't support ?logs=true parameter
-        result = api.get_fight(fight_id, with_logs=not is_test)
+        # Try with logs first, fall back without if error
+        result = api.get_fight(fight_id, with_logs=True)
 
         # If we got an error with logs, retry without
-        if "error" in result and not is_test:
+        if "error" in result:
             result = api.get_fight(fight_id, with_logs=False)
 
         # Check for winner - can be 0 (draw), 1, or 2 (but not None/-1)
@@ -184,6 +258,17 @@ def wait_for_fight(api: LeekWarsAPI, fight_id: int, timeout: int = 120, is_test:
             return result
         time.sleep(2)
     raise Exception(f"Fight {fight_id} timed out after {timeout}s")
+
+
+def fetch_fight_logs(api: LeekWarsAPI, fight_id: int) -> dict:
+    """Fetch debug logs from the separate logs endpoint."""
+    try:
+        logs = api.get_fight_logs(fight_id)
+        if "error" in logs:
+            return {}
+        return logs
+    except Exception:
+        return {}
 
 
 @dataclass
@@ -213,18 +298,23 @@ class FightSummary:
     # AI say() messages
     messages: list[str]
 
-    # AI debug(), debugW(), debugE() output
+    # AI debug(), debugW(), debugE() output from actions
     debug_output: list[dict]
 
-    # AI debug logs from API (if available)
+    # AI debug logs from API (if available) - old format
     logs: list[str]
+
+    # API logs from /fight/get-logs endpoint (debug/debugW/debugE)
+    api_logs: dict
 
     # Raw data for deep analysis
     raw_actions: list
 
 
-def parse_fight(result: dict, our_farmer_id: int) -> FightSummary:
+def parse_fight(result: dict, our_farmer_id: int, api_logs: dict = None) -> FightSummary:
     """Parse fight result into structured summary."""
+    if api_logs is None:
+        api_logs = {}
 
     # Handle nested data structure (test fights have actions under 'data')
     fight_data = result.get("data", {})
@@ -464,6 +554,7 @@ def parse_fight(result: dict, our_farmer_id: int) -> FightSummary:
         messages=messages,
         debug_output=debug_output,
         logs=logs,
+        api_logs=api_logs,
         raw_actions=actions
     )
 
@@ -540,7 +631,7 @@ def format_summary(summary: FightSummary) -> str:
         if len(summary.debug_output) > 30:
             lines.append(f"  ... ({len(summary.debug_output) - 30} more)")
 
-    # AI Debug logs from API
+    # AI Debug logs from API (old format)
     if summary.logs:
         lines.append("")
         lines.append("AI DEBUG LOGS:")
@@ -548,6 +639,36 @@ def format_summary(summary: FightSummary) -> str:
             lines.append(f"  {log}")
         if len(summary.logs) > 20:
             lines.append(f"  ... ({len(summary.logs) - 20} more)")
+
+    # API logs from /fight/get-logs endpoint (debug/debugW/debugE)
+    if summary.api_logs:
+        lines.append("")
+        lines.append("AI OUTPUT (from report):")
+        # api_logs structure: {farmer_id: {action_index: [[?, level, message, ...], ...]}}
+        # Level: 0=debug, 1=warn, 2=error (at index 1)
+        # Message text at index 2
+        all_messages = []
+        for farmer_id, farmer_logs in summary.api_logs.items():
+            if isinstance(farmer_logs, dict):
+                # Sorted by action index to maintain chronological order
+                for action_idx in sorted(farmer_logs.keys(), key=lambda x: int(x) if x.isdigit() else 0):
+                    messages = farmer_logs[action_idx]
+                    if isinstance(messages, list):
+                        for msg in messages:
+                            if isinstance(msg, list) and len(msg) >= 3:
+                                # Format: [unknown, level, message, ...]
+                                # Level: 0=mark(?), 1=debug, 2=debugW, 3=debugE
+                                level = msg[1]
+                                text = msg[2]
+                                level_str = {0: "M ", 1: "  ", 2: "W ", 3: "E "}.get(level, "  ")
+                                all_messages.append(f"{level_str}{text}")
+                            elif isinstance(msg, str):
+                                all_messages.append(f"  {msg}")
+
+        for msg in all_messages[:100]:  # Limit to first 100
+            lines.append(f"  {msg}")
+        if len(all_messages) > 100:
+            lines.append(f"  ... ({len(all_messages) - 100} more)")
 
     lines.append("")
     lines.append("=" * 70)
@@ -568,6 +689,7 @@ def save_fight_log(fight_id: int, result: dict, summary: FightSummary, is_test: 
         "timestamp": timestamp,
         "type": fight_type,
         "result": result,
+        "api_logs": summary.api_logs,
         "summary": {
             "fight_id": summary.fight_id,
             "winner": summary.winner,
@@ -644,6 +766,7 @@ def review_fight(fight_id: int, show_json: bool = False):
             else:
                 # Re-parse and format (need farmer_id, but we can use 0 for display)
                 result = data.get("result", {})
+                api_logs = data.get("api_logs", {})
                 # Try to get farmer_id from the data
                 farmer_id = 0
                 for leek in result.get("leeks1", []):
@@ -651,7 +774,7 @@ def review_fight(fight_id: int, show_json: bool = False):
                         farmer_id = leek["farmer"]
                         break
 
-                summary = parse_fight(result, farmer_id)
+                summary = parse_fight(result, farmer_id, api_logs=api_logs)
                 print(format_summary(summary))
             return
 
@@ -671,6 +794,7 @@ def main():
     parser.add_argument("--list", action="store_true", help="List saved fight logs")
     parser.add_argument("--review", type=int, metavar="ID", help="Review a saved fight by ID")
     parser.add_argument("--no-save", action="store_true", help="Don't save fight to log")
+    parser.add_argument("--scenario", type=int, help="Test scenario ID (default: 0 for Domingo)")
     args = parser.parse_args()
 
     # Handle --list and --review without needing credentials
@@ -744,15 +868,21 @@ def main():
                     ai_id = valid_ais[0]["id"]
                     print(f"Using AI: {valid_ais[0]['name']} (id:{ai_id})", file=sys.stderr)
 
-            print(f"Starting TEST fight vs Domingo (AI id:{ai_id})...", file=sys.stderr)
-            fight_id = api.start_test_fight(ai_id, scenario_id=0)
+            scenario_id = args.scenario if args.scenario else 0
+            scenario_name = f"scenario {scenario_id}" if scenario_id else "Domingo"
+            print(f"Starting TEST fight vs {scenario_name} (AI id:{ai_id})...", file=sys.stderr)
+            fight_id = api.start_test_fight(ai_id, scenario_id=scenario_id)
             is_test_fight = True
 
         print(f"Fight #{fight_id} started, waiting for result...", file=sys.stderr)
         result = wait_for_fight(api, fight_id, is_test=is_test_fight)
 
+        # Fetch debug logs from separate endpoint
+        print(f"Fetching debug logs...", file=sys.stderr)
+        api_logs = fetch_fight_logs(api, fight_id)
+
         # Parse the fight
-        summary = parse_fight(result, farmer_id)
+        summary = parse_fight(result, farmer_id, api_logs=api_logs)
 
         # Save to log (unless --no-save)
         if not args.no_save:

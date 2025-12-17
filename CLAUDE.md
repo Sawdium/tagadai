@@ -21,16 +21,19 @@ tagadai/
 │   └── tools/                # CLI tools for interacting with LeekWars
 │       ├── status.py         # Account status display
 │       ├── fight.py          # Run fights (test or real)
-│       └── aisync.py         # Upload/download AI code
+│       ├── aisync.py         # Upload/download AI code
+│       └── testrunner.py     # Run LeekScript tests
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # ACTIVE AI DEVELOPMENT - LeekScript v4 combat AI
 │   ├── AI/                   # Decision engine & scoring
 │   ├── Model/                # Entity, Item, Cell, Combo classes
 │   ├── Controlers/           # Fight logic, pathfinding, danger maps
 │   ├── Services/             # Damage calc, targeting, benchmarks
-│   ├── TESTS/                # AI unit tests
+│   ├── TESTS/                # Standalone unit tests (simpleTest, etc.)
 │   ├── TODO.md               # Static analysis issues tracker
-│   └── main                  # Entry point
+│   ├── main                  # Entry point
+│   ├── auto                  # Include aggregator (includes all AI modules)
+│   └── testMain              # Integration tests (must be at ROOT for includes)
 ├── data/                     # Fight history, analysis results
 └── tests/                    # Test suite
 ```
@@ -106,6 +109,103 @@ python -m src.tools.aisync put <ai_id> -         # Upload code from stdin
 python -m src.tools.aisync new <name>            # Create new AI file
 python -m src.tools.aisync rename <ai_id> <name> # Rename AI file
 ```
+
+### Test Runner
+```bash
+python -m src.tools.testrunner                   # Run all valid tests
+python -m src.tools.testrunner --test testMain   # Run specific test by name
+python -m src.tools.testrunner --list            # List available tests with validity
+python -m src.tools.testrunner --setup           # Setup custom test scenario
+python -m src.tools.testrunner --cleanup         # Remove custom test scenario
+python -m src.tools.testrunner --scenario 123    # Use specific scenario (default: 0=Domingo)
+```
+
+Runs LeekScript tests via test fights and parses debug output for assertions.
+
+## Testing
+
+### Test Architecture
+
+LeekWars uses **folder-relative include resolution**. This creates a constraint:
+- Tests in `TESTS/` folder **cannot** include ROOT-level files like `auto`
+- Include paths resolve relative to the file's folder, not the project root
+
+**Solution**: Integration tests must be at ROOT level to include both `auto` (main AI) and run tests.
+
+### Test Files
+
+| File | Location | Type | Description |
+|------|----------|------|-------------|
+| `testMain` | ROOT | Integration | Full AI integration tests (Entity, Items, Board, Scoring, AI) |
+| `simpleTest` | TESTS/ | Standalone | Sort class unit tests |
+| `test_Benchmark` | ROOT | Standalone | Benchmark.format() unit tests |
+
+### Writing Tests
+
+**Standalone tests** (no includes needed):
+```javascript
+// In tagadalive/TESTS/myTest or tagadalive/myTest
+global testsDone = false
+global testNumber = 0
+
+function assertEquals(testName, expected, result) {
+    testNumber += 1
+    if (expected == result) {
+        debug(testNumber + ' ' + testName + ' OK')
+    } else {
+        debug(testNumber + ' ' + testName + ' FAIL exp:' + expected + ' got:' + result)
+    }
+}
+
+if (!testsDone) {
+    debug("=== MY TESTS ===")
+    assertEquals("test name", expectedValue, actualValue)
+    debug("=== DONE ===")
+    testsDone = true
+}
+```
+
+**Integration tests** (need main AI classes):
+```javascript
+// Must be at ROOT level (e.g., tagadalive/testMain)
+include('auto')
+
+global testsDone = false
+global testNumber = 0
+
+function assertEquals(testName, expected, result) { /* same as above */ }
+
+if (!testsDone) {
+    init()  // Initialize AI systems
+
+    // Now you can use Fight.self, Board.cells, AI.getPotentialCombo(), etc.
+    assertEquals("Fight.self exists", true, Fight.self != null)
+
+    testsDone = true
+}
+```
+
+### Adding New Tests
+
+1. **For standalone tests** (testing isolated functions):
+   - Create file in `tagadalive/TESTS/` or `tagadalive/`
+   - Upload: `python -m src.tools.aisync new myTest` then `python -m src.tools.aisync put <id> tagadalive/TESTS/myTest`
+
+2. **For integration tests** (testing AI classes):
+   - Add test assertions to `tagadalive/testMain`
+   - Upload: `python -m src.tools.aisync put 452028 tagadalive/testMain`
+
+3. **Run tests**: `python -m src.tools.testrunner`
+
+### Test Output Format
+
+Tests use `debug()` with this format for the testrunner to parse:
+```
+<number> <testName> OK        # Pass
+<number> <testName> FAIL ...  # Fail with details
+```
+
+The `global testsDone` flag ensures tests run only once across multiple turns.
 
 ## LeekWars API Reference
 
@@ -402,6 +502,20 @@ common_loss_patterns = []
 - Do NOT include Claude references in commit messages (no "Generated with Claude", no "Co-Authored-By: Claude")
 - Write commit messages as if written by the developer
 - Keep messages concise and descriptive
+
+### Knowledge Consolidation
+When encountering and fixing issues related to LeekWars API, LeekScript, test fights, CLI tools, or any project-specific behavior:
+
+**IMPORTANT**: Before making any consolidation changes, report to the user and propose a consolidation plan. Wait for approval before proceeding.
+
+The consolidation plan should cover:
+1. **Document the issue**: Add the root cause and fix to relevant documentation (this file, `docs/LEEKWARS_API.md`, or inline comments)
+2. **Update scripts**: If a tool had a bug or missing feature, ensure the fix is complete and robust
+3. **Add to TODO.md**: If the issue reveals broader problems in LeekScript code, track them in `tagadalive/TODO.md`
+4. **Prevent recurrence**: Add examples, warnings, or clarifications so the same mistake isn't repeated
+5. **Update tests**: If applicable, add test cases to catch similar issues
+
+This ensures hard-won knowledge is preserved and the project improves with each debugging session.
 
 ## Key Resources
 
