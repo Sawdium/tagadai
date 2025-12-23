@@ -18,11 +18,15 @@ tagadai/
 ├── docs/
 │   └── LEEKWARS_API.md       # Complete API reference (extracted from source)
 ├── src/
-│   └── tools/                # CLI tools for interacting with LeekWars
-│       ├── status.py         # Account status display
-│       ├── fight.py          # Run fights (test or real)
-│       ├── aisync.py         # Upload/download AI code
-│       └── testrunner.py     # Run LeekScript tests
+│   ├── tools/                # CLI tools for interacting with LeekWars
+│   │   ├── status.py         # Account status display
+│   │   ├── fight.py          # Run fights (test or real)
+│   │   ├── aisync.py         # Upload/download AI code
+│   │   └── testrunner.py     # Run LeekScript tests
+│   ├── dashboard/            # Training dashboard (see README.md)
+│   ├── scraper/              # Fight data scraper (see README.md)
+│   ├── ml/                   # ML training infrastructure (see README.md)
+│   └── localfight/           # Local fight runner (see README.md)
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # ACTIVE AI DEVELOPMENT - LeekScript v4 combat AI
 │   ├── AI/                   # Decision engine & scoring
@@ -34,7 +38,7 @@ tagadai/
 │   ├── main                  # Entry point
 │   ├── auto                  # Include aggregator (includes all AI modules)
 │   └── testMain              # Integration tests (must be at ROOT for includes)
-├── data/                     # Fight history, analysis results
+├── data/                     # Fight history, ML models, scraped data
 └── tests/                    # Test suite
 ```
 
@@ -121,6 +125,17 @@ python -m src.tools.testrunner --scenario 123    # Use specific scenario (defaul
 ```
 
 Runs LeekScript tests via test fights and parses debug output for assertions.
+
+## ML Infrastructure
+
+Four modules support ML-based AI training. Each has its own README with detailed usage:
+
+| Module | Purpose | Entry Point |
+|--------|---------|-------------|
+| `src/dashboard/` | Web UI for training monitoring | `python -m src.dashboard` |
+| `src/scraper/` | Fight data collection from API | Library (see README) |
+| `src/ml/` | Neural network training pipeline | Library (see README) |
+| `src/localfight/` | Offline fight execution via JAR | Library (see README) |
 
 ## Testing
 
@@ -574,12 +589,13 @@ This ensures hard-won knowledge is preserved and the project improves with each 
 
 ## TODO / Roadmap
 
+- [x] Fight history database (`src/scraper/`)
+- [x] Analysis dashboard (`src/dashboard/`)
+- [x] Metrics extraction and aggregation (`src/ml/dataset.py`)
+- [x] Local fight runner (`src/localfight/`)
+- [x] ML training infrastructure (`src/ml/`)
 - [ ] API client with full endpoint coverage
 - [ ] Fight launcher with opponent selection strategies
-- [ ] Fight result parser and action decoder
-- [ ] Metrics extraction and aggregation
-- [ ] Fight history database
-- [ ] Analysis dashboard / reporting
 - [ ] AI code generator (template-based)
 - [ ] Learning loop orchestrator
 - [ ] Advanced: LLM-assisted code improvement
