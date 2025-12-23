@@ -38,3 +38,10 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Build artifacts
+.cache/
+
+# ML training data (generated)
+scenarios/
+results/
