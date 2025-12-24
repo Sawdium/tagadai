@@ -95,10 +95,10 @@ class FightDatabase:
                     leek_id INTEGER NOT NULL,
                     farmer_id INTEGER,
                     level INTEGER,
-                    talent INTEGER,  -- From fight context, not leek stats
+                    talent INTEGER,  -- From outer leeks (leeks1/leeks2), authoritative
                     team INTEGER,
                     won BOOLEAN,
-                    -- Combat stats at fight time
+                    -- Combat stats at fight time (from data.leeks)
                     life INTEGER,
                     strength INTEGER,
                     agility INTEGER,
@@ -109,6 +109,11 @@ class FightDatabase:
                     frequency INTEGER,
                     tp INTEGER,
                     mp INTEGER,
+                    starting_cell INTEGER,  -- cellPos from data.leeks
+                    -- Fight outcome stats (from report)
+                    damage_dealt INTEGER,  -- td from report
+                    damage_blocked INTEGER,  -- tb from report
+                    dead BOOLEAN,  -- from report
                     -- Metadata
                     fight_context INTEGER,  -- 0=test, 1=challenge, 2=garden, 3=tournament
                     fight_type INTEGER,  -- 0=solo, 1=farmer, 2=team
@@ -428,30 +433,72 @@ class FightDatabase:
         """
         Extract leek observations from fight data and save to DB.
         Returns list of newly discovered leek IDs.
+
+        Fight data has TWO leek sources that must be correlated:
+        - leeks1/leeks2 (outer): Real leek IDs, talent, farmer_id
+        - data.leeks (inner): Combat stats (life, strength, etc.) but fight-local entity IDs
+
+        We also extract outcome data from report.leeks1/report.leeks2:
+        - td (damage dealt), tb (damage blocked), dead
         """
         winner = fight_data.get("winner", -1)
         fight_type = fight_data.get("type", -1)
         context = fight_data.get("context", -1)
 
-        # Get leeks from nested data structure
-        data = fight_data.get("data", {})
-        leeks = data.get("leeks", [])
+        # Build name → {real_id, talent, farmer_id} map from outer leeks
+        outer_leeks = fight_data.get("leeks1", []) + fight_data.get("leeks2", [])
+        name_to_outer = {}
+        for leek in outer_leeks:
+            name = leek.get("name")
+            if name:
+                name_to_outer[name] = {
+                    "id": leek.get("id"),
+                    "talent": leek.get("talent", 0),
+                    "farmer": leek.get("farmer"),
+                }
 
-        if not leeks:
+        # Build name → {td, tb, dead} map from report
+        report = fight_data.get("report", {})
+        report_leeks = report.get("leeks1", []) + report.get("leeks2", [])
+        name_to_report = {}
+        for leek in report_leeks:
+            name = leek.get("name")
+            if name:
+                name_to_report[name] = {
+                    "td": leek.get("td", 0),  # damage dealt
+                    "tb": leek.get("tb", 0),  # damage blocked
+                    "dead": leek.get("dead", False),
+                }
+
+        # Get inner leeks with combat stats
+        data = fight_data.get("data", {})
+        inner_leeks = data.get("leeks", [])
+
+        if not inner_leeks:
             return []
 
         now = datetime.now().isoformat()
         new_leeks = []
 
         with sqlite3.connect(self.db_path) as conn:
-            for leek in leeks:
+            for leek in inner_leeks:
                 # Skip summons (bulbs, etc)
                 if leek.get("summon", False):
                     continue
 
-                leek_id = leek.get("id")
-                if not leek_id:
+                name = leek.get("name")
+                if not name:
                     continue
+
+                # Look up real leek ID from outer data
+                outer = name_to_outer.get(name, {})
+                real_leek_id = outer.get("id")
+                if not real_leek_id:
+                    # Fallback: might be a summon or edge case
+                    continue
+
+                # Get report data for this leek
+                report_data = name_to_report.get(name, {})
 
                 team = leek.get("team", 0)
                 won = (winner == team)
@@ -459,24 +506,25 @@ class FightDatabase:
                 # Check if this leek is new to us
                 cursor = conn.execute(
                     "SELECT 1 FROM leek_observations WHERE leek_id = ? LIMIT 1",
-                    (leek_id,)
+                    (real_leek_id,)
                 )
                 if cursor.fetchone() is None:
-                    new_leeks.append(leek_id)
+                    new_leeks.append(real_leek_id)
 
                 # Insert or update observation
                 conn.execute(
                     """INSERT OR REPLACE INTO leek_observations
                        (fight_id, leek_id, farmer_id, level, talent, team, won,
                         life, strength, agility, wisdom, resistance, magic, science, frequency,
-                        tp, mp, fight_context, fight_type, observed_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tp, mp, starting_cell, damage_dealt, damage_blocked, dead,
+                        fight_context, fight_type, observed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         fight_id,
-                        leek_id,
-                        leek.get("farmer"),
+                        real_leek_id,
+                        outer.get("farmer") or leek.get("farmer"),
                         leek.get("level", 0),
-                        leek.get("talent", 0),  # May be in fight context
+                        outer.get("talent", 0),  # From outer leeks, authoritative
                         team,
                         won,
                         leek.get("life", 0),
@@ -489,6 +537,10 @@ class FightDatabase:
                         leek.get("frequency", 0),
                         leek.get("tp", 0),
                         leek.get("mp", 0),
+                        leek.get("cellPos", 0),  # Starting position
+                        report_data.get("td", 0),
+                        report_data.get("tb", 0),
+                        report_data.get("dead", False),
                         context,
                         fight_type,
                         now,
@@ -611,32 +663,67 @@ class FightDatabase:
 
     def calculate_priority_score(self, level: int, total_stats: int, win_rate: float) -> float:
         """
-        Calculate priority score for a leek based on level-relative performance.
+        Calculate priority score for a leek based on DATA DIVERSITY needs.
 
-        Higher score = more interesting to scrape.
-        - Low levels (1-50): prioritize win rate
-        - Mid levels (51-150): mix of stats above mean + win rate
-        - High levels (150+): prioritize raw stats
+        Higher score = more urgent to scrape for balanced training data.
+        Priority is based on:
+        1. Under-represented levels get MASSIVE boost
+        2. Level 301 gets lowest priority (usually over-represented)
+        3. Win rate and stats are secondary factors
         """
-        level_stats = self.get_level_stats(level)
+        # Get observation counts by level bracket
+        bracket_counts = self.get_level_bracket_counts()
 
+        # Determine which bracket this level falls into
         if level <= 50:
-            # Low level: win rate is king (stats are too similar)
-            return win_rate * 100
+            bracket = "1-50"
+        elif level <= 100:
+            bracket = "51-100"
         elif level <= 150:
-            # Mid level: 50% win rate, 50% stats above mean
-            if level_stats and level_stats["mean_talent"] > 0:
-                stats_ratio = total_stats / level_stats["mean_talent"]
-            else:
-                stats_ratio = 1.0
-            return (win_rate * 50) + (stats_ratio * 50)
+            bracket = "101-150"
+        elif level <= 200:
+            bracket = "151-200"
+        elif level <= 250:
+            bracket = "201-250"
+        elif level <= 300:
+            bracket = "251-300"
         else:
-            # High level: mostly stats, some win rate
-            if level_stats and level_stats["mean_talent"] > 0:
-                stats_ratio = total_stats / level_stats["mean_talent"]
+            bracket = "301"
+
+        # Calculate diversity bonus based on under-representation
+        bracket_data = bracket_counts.get(bracket, {"count": 0})
+        bracket_count = bracket_data.get("count", 0)
+
+        # Get total observations
+        total_obs = sum(b.get("count", 0) for b in bracket_counts.values())
+
+        if total_obs == 0:
+            # No data yet - all levels equally important
+            diversity_bonus = 100
+        else:
+            # Calculate expected count (uniform distribution across 7 brackets)
+            expected_count = total_obs / 7
+
+            if bracket_count < expected_count:
+                # Under-represented: massive bonus
+                # The more under-represented, the higher the bonus
+                scarcity_ratio = expected_count / max(bracket_count, 1)
+                diversity_bonus = min(500, 100 * scarcity_ratio)  # Cap at 500
             else:
-                stats_ratio = total_stats / 1000  # Rough baseline
-            return (win_rate * 20) + (stats_ratio * 80)
+                # Over-represented: minimal bonus or penalty
+                excess_ratio = bracket_count / expected_count
+                diversity_bonus = max(10, 100 / excess_ratio)  # Min 10, decreases with excess
+
+        # Level 301 special case: if we have >50% level 301, heavily penalize
+        level_301_ratio = self.get_level_301_ratio()
+        if level == 301 and level_301_ratio > 0.3:
+            # Reduce priority significantly for level 301 when over-represented
+            diversity_bonus = diversity_bonus * (1 - level_301_ratio)
+
+        # Add small bonus for win rate (good players have more interesting fights)
+        win_bonus = win_rate * 20
+
+        return diversity_bonus + win_bonus
 
     # Analytics methods
     def get_level_distribution(self, fight_type: Optional[int] = None) -> list[dict]:

@@ -339,31 +339,45 @@ class FightScraper:
         if not new_leeks:
             return
 
-        # Get leek data from fight for priority calculation
+        # Build name → real_id map from outer leeks
+        outer_leeks = fight_data.get("leeks1", []) + fight_data.get("leeks2", [])
+        name_to_real_id = {l.get("name"): l.get("id") for l in outer_leeks if l.get("name")}
+        real_id_to_outer = {l.get("id"): l for l in outer_leeks if l.get("id")}
+
+        # Build name → inner leek (with stats) map
         data = fight_data.get("data", {})
-        leeks_map = {l.get("id"): l for l in data.get("leeks", []) if l.get("id")}
+        name_to_inner = {l.get("name"): l for l in data.get("leeks", []) if l.get("name") and not l.get("summon", False)}
+
         winner = fight_data.get("winner", -1)
 
         for leek_id in new_leeks:
-            leek = leeks_map.get(leek_id, {})
-            if leek.get("summon", False):
+            # Get outer leek info
+            outer = real_id_to_outer.get(leek_id, {})
+            if not outer:
                 continue
 
-            level = leek.get("level", 0)
-            farmer_id = leek.get("farmer", 0)
+            name = outer.get("name")
+            if not name:
+                continue
 
-            # Calculate total stats
+            # Get inner leek with stats
+            inner = name_to_inner.get(name, {})
+
+            level = inner.get("level", 0) or outer.get("level", 0)
+            farmer_id = outer.get("farmer", 0) or inner.get("farmer", 0)
+
+            # Calculate total stats from inner leek
             total_stats = sum([
-                leek.get("strength", 0),
-                leek.get("agility", 0),
-                leek.get("wisdom", 0),
-                leek.get("resistance", 0),
-                leek.get("magic", 0),
-                leek.get("science", 0),
+                inner.get("strength", 0),
+                inner.get("agility", 0),
+                inner.get("wisdom", 0),
+                inner.get("resistance", 0),
+                inner.get("magic", 0),
+                inner.get("science", 0),
             ])
 
             # Win rate from this single observation
-            team = leek.get("team", 0)
+            team = inner.get("team", 0)
             won = 1.0 if winner == team else 0.0
 
             # Calculate priority score
@@ -411,7 +425,12 @@ class FightScraper:
     def explore_tournament(self, tournament_id: int) -> int:
         """
         Explore a tournament and add participants to discovery queue.
-        Returns number of leeks found.
+        Returns number of leeks/farmers found.
+
+        Handles all tournament types:
+        - solo: Extract leek IDs directly (level in name)
+        - farmer: Extract farmer IDs, scrape their histories
+        - team: Extract farmer IDs from team compositions
         """
         if self.db.is_tournament_explored(tournament_id):
             return 0
@@ -425,66 +444,85 @@ class FightScraper:
         tournament_type = data.get("type", "unknown")
         tournament_date = data.get("date", 0)
 
-        # Only explore solo tournaments (they have individual leek levels)
-        if tournament_type != "solo":
-            self.db.mark_tournament_explored(
-                tournament_id, tournament_type, tournament_date, 0, 0
-            )
-            return 0
-
-        # Extract leeks from rounds
-        leeks_found = set()
-        low_level_count = 0
-
         # Calculate priority boost based on level 301 ratio
         level_301_ratio = self.db.get_level_301_ratio()
-        # If we have >50% level 301 data, boost low-level priority
         low_level_boost = 100 if level_301_ratio > 0.5 else 50
 
-        for round_name, matches in data.get("rounds", {}).items():
-            for match in matches:
-                for contestant in match.get("contestants", []):
-                    leek_id = contestant.get("id")
-                    if not leek_id or leek_id in leeks_found:
-                        continue
+        found_count = 0
+        low_level_count = 0
 
-                    leeks_found.add(leek_id)
+        if tournament_type == "solo":
+            # Solo tournaments: extract leek IDs with levels
+            leeks_found = set()
+            for round_name, matches in data.get("rounds", {}).items():
+                for match in matches:
+                    for contestant in match.get("contestants", []):
+                        leek_id = contestant.get("id")
+                        if not leek_id or leek_id in leeks_found:
+                            continue
 
-                    # Extract level from name like "Chara (300)"
-                    name = contestant.get("name", "")
-                    level_match = re.search(r"\((\d+)\)", name)
-                    level = int(level_match.group(1)) if level_match else 0
+                        leeks_found.add(leek_id)
 
-                    if level < self.LOW_LEVEL_THRESHOLD:
-                        low_level_count += 1
+                        # Extract level from name like "Chara (300)"
+                        name = contestant.get("name", "")
+                        level_match = re.search(r"\((\d+)\)", name)
+                        level = int(level_match.group(1)) if level_match else 301
 
-                    # Won a match = higher priority
-                    won = contestant.get("win", False)
+                        if level < self.LOW_LEVEL_THRESHOLD:
+                            low_level_count += 1
 
-                    # Calculate priority with boost for low-level if needed
-                    base_priority = 50 if won else 25
-                    if level < self.LOW_LEVEL_THRESHOLD and level_301_ratio > 0.5:
-                        priority = base_priority + low_level_boost + (self.LOW_LEVEL_THRESHOLD - level)
-                    else:
-                        priority = base_priority
+                        # Won a match = higher priority
+                        won = contestant.get("win", False)
 
-                    # Add to discovery queue
-                    self.db.add_to_discovery_queue(
-                        leek_id=leek_id,
-                        farmer_id=0,  # Unknown from tournament data
-                        level=level,
-                        priority_score=priority,
-                        discovered_in_fight=0  # From tournament, not fight
-                    )
+                        # Calculate priority with boost for low-level if needed
+                        base_priority = 50 if won else 25
+                        if level < self.LOW_LEVEL_THRESHOLD and level_301_ratio > 0.5:
+                            priority = base_priority + low_level_boost + (self.LOW_LEVEL_THRESHOLD - level)
+                        else:
+                            priority = base_priority
+
+                        # Add to discovery queue
+                        self.db.add_to_discovery_queue(
+                            leek_id=leek_id,
+                            farmer_id=0,
+                            level=level,
+                            priority_score=priority,
+                            discovered_in_fight=0
+                        )
+
+            found_count = len(leeks_found)
+
+        elif tournament_type in ("farmer", "team"):
+            # Farmer/team tournaments: extract farmer IDs and scrape their histories
+            # This discovers their leeks indirectly through fight data
+            farmers_found = set()
+            for round_name, matches in data.get("rounds", {}).items():
+                for match in matches:
+                    for contestant in match.get("contestants", []):
+                        farmer_id = contestant.get("id")
+                        if not farmer_id or farmer_id in farmers_found:
+                            continue
+
+                        farmers_found.add(farmer_id)
+
+                        # Scrape farmer history immediately (adds fights to queue)
+                        # This will discover their leeks from their fight history
+                        won = contestant.get("win", False)
+                        talent = 100 if won else 50  # Rough priority based on tournament success
+                        self.scrape_player_history("farmer", farmer_id, talent)
+
+            found_count = len(farmers_found)
+            # For farmer/team, we don't know individual leek levels yet
+            low_level_count = 0
 
         # Mark tournament as explored
         self.db.mark_tournament_explored(
             tournament_id, tournament_type, tournament_date,
-            len(leeks_found), low_level_count
+            found_count, low_level_count
         )
 
-        logger.info(f"Tournament {tournament_id}: found {len(leeks_found)} leeks, {low_level_count} low-level")
-        return len(leeks_found)
+        logger.info(f"Tournament {tournament_id} ({tournament_type}): found {found_count} {'leeks' if tournament_type == 'solo' else 'farmers'}")
+        return found_count
 
     def explore_tournaments_backward(self, count: int = 10) -> int:
         """
