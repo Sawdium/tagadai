@@ -2214,3 +2214,577 @@ footer {
     overflow: hidden;
     background-color: var(--bg-tertiary);
 }
+
+/* ========== RL TAB STYLES ========== */
+
+.rl-control-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.rl-status-compact {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 120px;
+}
+
+.rl-status-compact .status-icon {
+    font-size: 18px;
+}
+
+.rl-status-compact .status-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.rl-status-compact .status-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.rl-status-compact .status-subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.rl-status-compact.running .status-title {
+    color: var(--accent-green);
+}
+
+.rl-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.rl-config-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.rl-config-inline select,
+.rl-config-inline input {
+    padding: 4px 8px;
+    font-size: 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.rl-config-inline select {
+    min-width: 150px;
+}
+
+.rl-config-inline input {
+    width: 60px;
+}
+
+.rl-metrics-inline {
+    display: flex;
+    gap: 16px;
+    margin-left: auto;
+}
+
+.rl-metrics-inline .metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.rl-metrics-inline .value {
+    font-size: 16px;
+    font-weight: 600;
+    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text-primary);
+}
+
+.rl-metrics-inline .label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.rl-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 10px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.progress-bar.rl {
+    background: linear-gradient(90deg, var(--accent-purple), var(--accent-blue));
+}
+
+.rl-main-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+/* Duel Config */
+.duel-config {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.duel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.duel-row label {
+    min-width: 50px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.duel-row input {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.duel-result {
+    margin-top: 12px;
+    padding: 12px;
+    background-color: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.duel-outcome {
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.duel-outcome.win {
+    color: var(--accent-green);
+}
+
+.duel-outcome.loss {
+    color: var(--accent-red);
+}
+
+.duel-outcome.draw {
+    color: var(--accent-yellow);
+}
+
+.duel-stats {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.duel-stats strong {
+    color: var(--text-primary);
+}
+
+/* Scenario Results */
+.scenario-results {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.scenario-result {
+    padding: 10px;
+    background-color: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.scenario-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.scenario-stats {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* Telemetry Display */
+.telemetry-display {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.telemetry-summary {
+    display: flex;
+    gap: 16px;
+    padding: 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+}
+
+.telemetry-agents {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.agent-metrics {
+    padding: 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+    border-left: 3px solid var(--accent-blue);
+}
+
+.agent-name {
+    font-weight: 600;
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.agent-stats {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* RL Responsive */
+@media (max-width: 1200px) {
+    .rl-main-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 900px) {
+    .rl-main-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .rl-metrics-inline {
+        margin-left: 0;
+        width: 100%;
+        justify-content: space-around;
+    }
+}
+
+/* ========== UNIFIED LOGS DRAWER ========== */
+
+.logs-drawer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    z-index: 1000;
+    transition: height 0.3s ease, opacity 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.logs-drawer.collapsed {
+    height: 0;
+    border-top: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.logs-drawer.open {
+    height: 280px;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.logs-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background-color: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    min-height: 40px;
+}
+
+.logs-drawer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.logs-drawer-title .icon {
+    font-size: 16px;
+}
+
+.logs-filter-buttons {
+    display: flex;
+    gap: 4px;
+}
+
+.logs-filter-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.logs-filter-btn:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.logs-filter-btn.active {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: white;
+}
+
+.logs-filter-btn.active.training {
+    background-color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+
+.logs-filter-btn.active.scraper {
+    background-color: var(--accent-purple);
+    border-color: var(--accent-purple);
+}
+
+.logs-filter-btn.active.rl {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+}
+
+.logs-drawer-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.logs-drawer-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 16px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 11px;
+}
+
+.logs-drawer .log-entry {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.logs-drawer .log-entry:last-child {
+    border-bottom: none;
+}
+
+.logs-drawer .log-time {
+    color: var(--text-secondary);
+    min-width: 65px;
+    flex-shrink: 0;
+}
+
+.logs-drawer .log-category {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    min-width: 60px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.logs-drawer .log-category.training {
+    background-color: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+}
+
+.logs-drawer .log-category.scraper {
+    background-color: rgba(163, 113, 247, 0.2);
+    color: var(--accent-purple);
+}
+
+.logs-drawer .log-category.rl {
+    background-color: rgba(88, 166, 255, 0.2);
+    color: var(--accent-blue);
+}
+
+.logs-drawer .log-message {
+    flex: 1;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.logs-drawer .log-entry.info .log-message {
+    color: var(--text-primary);
+}
+
+.logs-drawer .log-entry.success .log-message {
+    color: var(--accent-green);
+}
+
+.logs-drawer .log-entry.warning .log-message {
+    color: var(--accent-yellow);
+}
+
+.logs-drawer .log-entry.error .log-message {
+    color: var(--accent-red);
+}
+
+/* Logs Toggle Button in Footer */
+.logs-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.logs-toggle-btn:hover {
+    background-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.logs-toggle-btn.active {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+    color: white;
+}
+
+.logs-toggle-btn .badge {
+    background-color: var(--accent-red);
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 10px;
+    min-width: 18px;
+    text-align: center;
+}
+
+/* Adjust container padding when drawer is open */
+body.logs-drawer-open .container {
+    padding-bottom: 300px;
+}
+
+/* ========== DATA TAB STYLES ========== */
+
+.data-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.data-analytics-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.data-details-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.chart-container.compact {
+    height: 180px;
+}
+
+.chart-container.compact canvas {
+    max-height: 180px;
+}
+
+@media (max-width: 900px) {
+    .data-grid,
+    .data-analytics-row,
+    .data-details-row {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ========== MODELS TAB STYLES ========== */
+
+.models-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.models-versions-section {
+    margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+    .models-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ========== TRAINING TAB SIDEBAR ========== */
+
+.training-main-grid {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 12px;
+}
+
+.training-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+@media (max-width: 1100px) {
+    .training-main-grid {
+        grid-template-columns: 1fr;
+    }
+}

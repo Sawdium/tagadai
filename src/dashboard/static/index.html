@@ -21,19 +21,18 @@
             </div>
         </header>
 
-        <!-- Tab Navigation -->
+        <!-- Tab Navigation (5 tabs) -->
         <nav class="tabs">
-            <button class="tab-btn active" data-tab="control">Control</button>
-            <button class="tab-btn" data-tab="training">Training</button>
+            <button class="tab-btn active" data-tab="training">Training</button>
+            <button class="tab-btn" data-tab="rl">RL</button>
             <button class="tab-btn" data-tab="scraper">Scraper</button>
-            <button class="tab-btn" data-tab="versions">Versions</button>
-            <button class="tab-btn" data-tab="arena">Arena</button>
-            <button class="tab-btn" data-tab="logs">Logs</button>
+            <button class="tab-btn" data-tab="data">Data</button>
+            <button class="tab-btn" data-tab="models">Models</button>
         </nav>
 
         <main>
-            <!-- Control Tab -->
-            <section id="control-tab" class="tab-content active">
+            <!-- ========== TRAINING TAB (merged Control + Training) ========== -->
+            <section id="training-tab" class="tab-content active">
                 <!-- Control Row: Status + Buttons + Metrics -->
                 <div class="control-row">
                     <div class="control-status" id="status-banner">
@@ -77,32 +76,6 @@
                     <div class="config-compact"><label>Patience</label><input type="number" id="config-patience" value="5" min="1" max="20"></div>
                 </div>
 
-                <!-- GPU + Checkpoints side by side -->
-                <div class="control-grid">
-                    <div class="card compact">
-                        <h2>GPU</h2>
-                        <div class="gpu-monitor-compact">
-                            <div class="gpu-stat"><span class="label">Device</span><span class="value" id="gpu-name">Loading...</span></div>
-                            <div class="gpu-stat"><span class="label">Memory</span><span class="value" id="gpu-memory">--</span>
-                                <div class="gpu-memory-bar"><div class="gpu-memory-fill" id="gpu-memory-bar" style="width: 0%"></div></div>
-                            </div>
-                            <div class="gpu-stat"><span class="label">Util</span><span class="value" id="gpu-util">--%</span></div>
-                        </div>
-                    </div>
-                    <div class="card compact">
-                        <div class="card-header-inline">
-                            <h2>Checkpoints</h2>
-                            <button class="btn small" id="btn-load-checkpoint">Load</button>
-                        </div>
-                        <div class="checkpoint-list compact" id="checkpoint-list">
-                            <p class="empty-state compact">No checkpoints yet</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Training Tab -->
-            <section id="training-tab" class="tab-content">
                 <!-- Progress Row -->
                 <div class="progress-row">
                     <div class="progress-item-compact">
@@ -127,101 +100,156 @@
                     </div>
                 </div>
 
-                <!-- Stats Grid -->
-                <div class="training-stats-grid">
-                    <div class="card compact stat-card">
-                        <h3>Fight Results</h3>
-                        <div class="stat-content compact"><canvas id="fight-chart"></canvas></div>
-                        <div class="stat-details compact">
-                            <div class="stat-row"><span class="stat-label">T1 Wins</span><span class="stat-value team1" id="team1-wins">0</span></div>
-                            <div class="stat-row"><span class="stat-label">T2 Wins</span><span class="stat-value team2" id="team2-wins">0</span></div>
-                            <div class="stat-row"><span class="stat-label">Draws</span><span class="stat-value" id="draws">0</span></div>
-                            <div class="stat-row highlight"><span class="stat-label">Rate</span><span class="stat-value" id="win-rate">0%</span></div>
+                <!-- Main Grid: Charts + GPU/Checkpoints -->
+                <div class="training-main-grid">
+                    <!-- Charts Column -->
+                    <div class="training-charts-column">
+                        <div class="training-stats-grid">
+                            <div class="card compact stat-card">
+                                <h3>Fight Results</h3>
+                                <div class="stat-content compact"><canvas id="fight-chart"></canvas></div>
+                                <div class="stat-details compact">
+                                    <div class="stat-row"><span class="stat-label">T1 Wins</span><span class="stat-value team1" id="team1-wins">0</span></div>
+                                    <div class="stat-row"><span class="stat-label">T2 Wins</span><span class="stat-value team2" id="team2-wins">0</span></div>
+                                    <div class="stat-row"><span class="stat-label">Draws</span><span class="stat-value" id="draws">0</span></div>
+                                    <div class="stat-row highlight"><span class="stat-label">Rate</span><span class="stat-value" id="win-rate">0%</span></div>
+                                </div>
+                            </div>
+
+                            <div class="card compact stat-card">
+                                <h3>Training Metrics</h3>
+                                <div class="stat-content compact"><canvas id="loss-chart"></canvas></div>
+                                <div class="stat-details compact">
+                                    <div class="stat-row"><span class="stat-label">Train Loss</span><span class="stat-value" id="train-loss">0.000</span></div>
+                                    <div class="stat-row"><span class="stat-label">Val Loss</span><span class="stat-value" id="val-loss">0.000</span></div>
+                                    <div class="stat-row highlight"><span class="stat-label">Accuracy</span><span class="stat-value accent" id="val-accuracy">0%</span></div>
+                                    <div class="stat-row"><span class="stat-label">LR</span><span class="stat-value" id="learning-rate">0.001</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card compact">
+                            <h3>Accuracy Over Time</h3>
+                            <div class="chart-container" style="height: 140px;">
+                                <canvas id="accuracy-chart"></canvas>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="card compact stat-card">
-                        <h3>Training Metrics</h3>
-                        <div class="stat-content compact"><canvas id="loss-chart"></canvas></div>
-                        <div class="stat-details compact">
-                            <div class="stat-row"><span class="stat-label">Train Loss</span><span class="stat-value" id="train-loss">0.000</span></div>
-                            <div class="stat-row"><span class="stat-label">Val Loss</span><span class="stat-value" id="val-loss">0.000</span></div>
-                            <div class="stat-row highlight"><span class="stat-label">Accuracy</span><span class="stat-value accent" id="val-accuracy">0%</span></div>
-                            <div class="stat-row"><span class="stat-label">LR</span><span class="stat-value" id="learning-rate">0.001</span></div>
+                    <!-- Sidebar: GPU + Checkpoints -->
+                    <div class="training-sidebar">
+                        <div class="card compact">
+                            <h2>GPU</h2>
+                            <div class="gpu-monitor-compact">
+                                <div class="gpu-stat"><span class="label">Device</span><span class="value" id="gpu-name">Loading...</span></div>
+                                <div class="gpu-stat"><span class="label">Memory</span><span class="value" id="gpu-memory">--</span>
+                                    <div class="gpu-memory-bar"><div class="gpu-memory-fill" id="gpu-memory-bar" style="width: 0%"></div></div>
+                                </div>
+                                <div class="gpu-stat"><span class="label">Util</span><span class="value" id="gpu-util">--%</span></div>
+                            </div>
                         </div>
-                    </div>
-
-                    <div class="card compact stat-card wide">
-                        <h3>Accuracy Over Time</h3>
-                        <div class="stat-content compact full"><canvas id="accuracy-chart"></canvas></div>
+                        <div class="card compact">
+                            <div class="card-header-inline">
+                                <h2>Checkpoints</h2>
+                            </div>
+                            <div class="checkpoint-list compact" id="checkpoint-list">
+                                <p class="empty-state compact">No checkpoints yet</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
 
-            <!-- Versions Tab -->
-            <section id="versions-tab" class="tab-content">
-                <div class="card compact">
-                    <div class="card-header-inline">
-                        <h2>AI Versions</h2>
-                        <div class="version-stats compact" id="version-stats">
-                            <span>Total: <strong>0</strong></span>
-                            <span>Champion: <strong>--</strong></span>
-                            <span>Best: <strong>0%</strong></span>
+            <!-- ========== RL TAB ========== -->
+            <section id="rl-tab" class="tab-content">
+                <!-- Control Row: Status + Buttons + Config -->
+                <div class="rl-control-row">
+                    <div class="rl-status-compact" id="rl-status-banner">
+                        <span class="status-icon" id="rl-status-icon">⏸️</span>
+                        <div class="status-text">
+                            <span class="status-title" id="rl-banner-title">Idle</span>
+                            <span class="status-subtitle" id="rl-banner-subtitle">Ready</span>
                         </div>
                     </div>
-                    <div class="version-list compact" id="version-list">
-                        <p class="empty-state compact">No versions yet</p>
+                    <div class="rl-buttons">
+                        <button class="control-btn primary compact" id="btn-rl-duel"><span class="icon">⚔</span> Duel</button>
+                        <button class="control-btn primary compact" id="btn-rl-start"><span class="icon">▶</span> Run</button>
+                        <button class="control-btn danger compact" id="btn-rl-stop" disabled><span class="icon">⏹</span> Stop</button>
+                    </div>
+                    <div class="rl-config-inline">
+                        <label>Scenario:</label>
+                        <select id="rl-scenario-select">
+                            <option value="">Select scenario...</option>
+                        </select>
+                        <label>Workers:</label>
+                        <input type="number" id="rl-workers" value="4" min="1" max="16">
+                    </div>
+                    <div class="rl-metrics-inline">
+                        <div class="metric"><span class="value" id="rl-metric-fights">0</span><span class="label">Fights</span></div>
+                        <div class="metric"><span class="value" id="rl-metric-winrate">--</span><span class="label">Win Rate</span></div>
+                        <div class="metric"><span class="value" id="rl-metric-speed">--</span><span class="label">F/s</span></div>
                     </div>
                 </div>
-            </section>
 
-            <!-- Arena Tab -->
-            <section id="arena-tab" class="tab-content">
-                <div class="arena-grid">
+                <!-- Progress Row -->
+                <div class="rl-progress-row" id="rl-progress-row" style="display: none;">
+                    <div class="progress-item-compact">
+                        <span class="progress-label">Progress</span>
+                        <div class="progress-bar-inline"><div class="progress-bar rl" id="rl-progress-bar"></div></div>
+                        <span class="progress-value" id="rl-progress-count">0 / 0</span>
+                    </div>
+                    <div class="timing-compact">
+                        <span>ETA: <strong id="rl-eta">--</strong></span>
+                    </div>
+                </div>
+
+                <!-- Main Grid: Duel + Scenario Results + Telemetry -->
+                <div class="rl-main-grid">
+                    <!-- Left: Duel Runner -->
                     <div class="card compact">
-                        <h2>Leaderboard</h2>
-                        <table class="leaderboard compact" id="leaderboard">
-                            <thead>
-                                <tr><th>#</th><th>Name</th><th>Elo</th><th>Acc</th><th>W-L</th><th>Rate</th></tr>
-                            </thead>
-                            <tbody>
-                                <tr><td colspan="6" class="empty-state compact">No versions yet</td></tr>
-                            </tbody>
-                        </table>
+                        <h2>Quick Duel</h2>
+                        <div class="duel-config">
+                            <div class="duel-row">
+                                <label>Bot 1:</label>
+                                <input type="text" id="rl-bot1" value="test/ai/simple.leek" placeholder="Path to bot 1">
+                            </div>
+                            <div class="duel-row">
+                                <label>Bot 2:</label>
+                                <input type="text" id="rl-bot2" value="test/ai/simple.leek" placeholder="Path to bot 2">
+                            </div>
+                            <div class="duel-row">
+                                <label>Seed:</label>
+                                <input type="number" id="rl-seed" placeholder="Random" min="0">
+                            </div>
+                        </div>
+                        <div class="duel-result" id="duel-result" style="display: none;">
+                            <div class="duel-outcome" id="duel-outcome">--</div>
+                            <div class="duel-stats">
+                                <span><strong id="duel-duration">--</strong> turns</span>
+                                <span><strong id="duel-time">--</strong>ms</span>
+                            </div>
+                        </div>
                     </div>
+
+                    <!-- Center: Scenario Results -->
                     <div class="card compact">
-                        <h2>Head-to-Head</h2>
-                        <div class="h2h-selector compact">
-                            <select id="h2h-v1"><option value="">V1</option></select>
-                            <span class="vs">VS</span>
-                            <select id="h2h-v2"><option value="">V2</option></select>
-                            <button id="h2h-predict" class="btn small">Go</button>
+                        <h2>Scenario Results</h2>
+                        <div class="scenario-results" id="scenario-results">
+                            <p class="empty-state compact">Run a scenario to see results</p>
                         </div>
-                        <div class="h2h-result" id="h2h-result" style="display: none;">
-                            <div class="h2h-bar"><div class="h2h-v1" id="h2h-v1-bar"></div><div class="h2h-v2" id="h2h-v2-bar"></div></div>
-                            <div class="h2h-labels"><span id="h2h-v1-pct">50%</span><span id="h2h-v2-pct">50%</span></div>
+                    </div>
+
+                    <!-- Right: Telemetry -->
+                    <div class="card compact">
+                        <h2>Telemetry</h2>
+                        <div class="telemetry-display" id="telemetry-display">
+                            <p class="empty-state compact">Run a duel with telemetry</p>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <!-- Logs Tab -->
-            <section id="logs-tab" class="tab-content">
-                <div class="card compact full-height">
-                    <div class="card-header-inline">
-                        <h2>Training Logs</h2>
-                        <div class="log-buttons">
-                            <button class="btn small" id="btn-clear-logs">Clear</button>
-                            <button class="btn small secondary" id="btn-export-logs">Export</button>
-                        </div>
-                    </div>
-                    <div class="logs-panel tall" id="logs-panel">
-                        <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-level-info">Waiting...</span></div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Scraper Tab -->
+            <!-- ========== SCRAPER TAB (controls only) ========== -->
             <section id="scraper-tab" class="tab-content">
                 <!-- Control Row: Status + Controls + Config -->
                 <div class="scraper-control-row">
@@ -239,7 +267,7 @@
                     </div>
                     <div class="scraper-config-inline">
                         <label>Delay:</label>
-                        <input type="number" id="scraper-delay" value="1.0" min="0.5" max="30" step="0.1">
+                        <input type="number" id="scraper-delay" value="1.0" min="0.1" max="60" step="0.1">
                         <span class="unit">sec</span>
                     </div>
                     <div class="scraper-metrics-inline">
@@ -267,79 +295,88 @@
                     <span class="error-text" id="scraper-error-text">Error message</span>
                 </div>
 
-                <!-- Main Grid: Charts + Info -->
-                <div class="scraper-main-grid">
-                    <!-- Left: Charts stacked -->
-                    <div class="scraper-charts-column">
-                        <div class="card compact">
-                            <div class="card-header-inline">
-                                <h2>Level Distribution</h2>
-                                <div class="chart-controls-inline">
-                                    <select id="level-chart-filter">
-                                        <option value="">All</option>
-                                        <option value="0">Solo</option>
-                                        <option value="1">Farmer</option>
-                                        <option value="2">Team</option>
-                                    </select>
-                                    <button class="btn small" id="btn-refresh-analytics">↻</button>
-                                </div>
-                            </div>
-                            <div class="chart-container" style="height: 140px;">
-                                <canvas id="level-distribution-chart"></canvas>
-                            </div>
+                <!-- Scraper Grid: Database + Activity -->
+                <div class="scraper-simple-grid">
+                    <div class="card compact">
+                        <div class="card-header-inline">
+                            <h2>Database</h2>
+                            <button class="btn small" id="btn-refresh-db-stats">↻</button>
                         </div>
-                        <div class="card compact">
-                            <div class="card-header-inline">
-                                <h2>Fight Dates</h2>
-                                <div class="chart-controls-inline">
-                                    <select id="date-chart-bucket" class="select-mini">
-                                        <option value="month">Month</option>
-                                        <option value="week">Week</option>
-                                        <option value="day">Day</option>
-                                    </select>
-                                    <span class="freshness-badge recent" id="freshness-recent-badge">0%</span>
-                                    <span class="freshness-badge old" id="freshness-old-badge">0%</span>
-                                </div>
-                            </div>
-                            <div class="chart-container" style="height: 120px;">
-                                <canvas id="date-distribution-chart"></canvas>
-                            </div>
+                        <div class="db-breakdown-compact" id="db-breakdown">
+                            <span class="loading">Loading...</span>
                         </div>
                     </div>
-
-                    <!-- Right: DB + Activity + Exploration -->
-                    <div class="scraper-right-column">
-                        <div class="card compact">
-                            <div class="card-header-inline">
-                                <h2>Database</h2>
-                                <button class="btn small" id="btn-refresh-db-stats">↻</button>
-                            </div>
-                            <div class="db-breakdown-compact" id="db-breakdown">
-                                <span class="loading">Loading...</span>
-                            </div>
-                        </div>
-                        <div class="card compact">
-                            <div class="card-header-inline">
-                                <h2>Level Balance</h2>
-                                <span class="ratio-indicator" id="level-301-ratio">301: --%</span>
-                            </div>
-                            <div class="bracket-bar-container">
-                                <div class="bracket-bar" id="bracket-bars"></div>
-                            </div>
-                        </div>
-                        <div class="card compact">
-                            <h2>Activity</h2>
-                            <div class="logs-panel compact" id="scraper-logs-panel">
-                                <div class="log-entry">
-                                    <span class="log-time">--:--:--</span>
-                                    <span class="log-level-info">Ready</span>
-                                </div>
+                    <div class="card compact">
+                        <h2>Activity</h2>
+                        <div class="logs-panel compact" id="scraper-activity-panel">
+                            <div class="log-entry">
+                                <span class="log-time">--:--:--</span>
+                                <span class="log-level-info">Ready</span>
                             </div>
                         </div>
                     </div>
                 </div>
+            </section>
 
-                <!-- Level Details (collapsible) -->
+            <!-- ========== DATA TAB (analytics from scraper) ========== -->
+            <section id="data-tab" class="tab-content">
+                <!-- Charts Row -->
+                <div class="data-charts-grid">
+                    <div class="card compact">
+                        <div class="card-header-inline">
+                            <h2>Level Distribution</h2>
+                            <div class="chart-controls-inline">
+                                <select id="level-chart-filter">
+                                    <option value="">All</option>
+                                    <option value="0">Solo</option>
+                                    <option value="1">Farmer</option>
+                                    <option value="2">Team</option>
+                                </select>
+                                <button class="btn small" id="btn-refresh-analytics">↻</button>
+                            </div>
+                        </div>
+                        <div class="chart-container" style="height: 200px;">
+                            <canvas id="level-distribution-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="card compact">
+                        <div class="card-header-inline">
+                            <h2>Fight Dates</h2>
+                            <div class="chart-controls-inline">
+                                <select id="date-chart-bucket" class="select-mini">
+                                    <option value="month">Month</option>
+                                    <option value="week">Week</option>
+                                    <option value="day">Day</option>
+                                </select>
+                                <span class="freshness-badge recent" id="freshness-recent-badge">0%</span>
+                                <span class="freshness-badge old" id="freshness-old-badge">0%</span>
+                            </div>
+                        </div>
+                        <div class="chart-container" style="height: 180px;">
+                            <canvas id="date-distribution-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Level Balance -->
+                <div class="card compact">
+                    <div class="card-header-inline">
+                        <h2>Level Balance</h2>
+                        <span class="ratio-indicator" id="level-301-ratio">301: --%</span>
+                    </div>
+                    <div class="bracket-bar-container">
+                        <div class="bracket-bar" id="bracket-bars"></div>
+                    </div>
+                    <div class="exploration-stats-compact" style="margin-top: 8px;">
+                        <div class="stat-mini"><span class="label">Tournaments</span><span class="value" id="tournaments-explored">0</span></div>
+                        <div class="stat-mini"><span class="label">From Tourneys</span><span class="value" id="tournament-leeks">0</span></div>
+                        <div class="stat-mini"><span class="label">Low Level</span><span class="value" id="tournament-low-level">0</span></div>
+                        <div class="stat-mini"><span class="label">Date Range</span><span class="value" id="tournament-date-range">--</span></div>
+                    </div>
+                </div>
+
+                <!-- Level Details (expanded on click) -->
                 <div class="card compact" id="level-details-card" style="display: none;">
                     <h2>Level <span id="selected-level">--</span> Details</h2>
                     <div class="level-details-compact">
@@ -359,13 +396,87 @@
                     </div>
                 </div>
             </section>
+
+            <!-- ========== MODELS TAB (merged Versions + Arena) ========== -->
+            <section id="models-tab" class="tab-content">
+                <div class="models-grid">
+                    <!-- Leaderboard -->
+                    <div class="card compact">
+                        <h2>Leaderboard</h2>
+                        <table class="leaderboard compact" id="leaderboard">
+                            <thead>
+                                <tr><th>#</th><th>Name</th><th>Elo</th><th>Acc</th><th>W-L</th><th>Rate</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td colspan="6" class="empty-state compact">No versions yet</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Versions + H2H -->
+                    <div class="models-right-column">
+                        <div class="card compact">
+                            <div class="card-header-inline">
+                                <h2>AI Versions</h2>
+                                <div class="version-stats compact" id="version-stats">
+                                    <span>Total: <strong>0</strong></span>
+                                    <span>Best: <strong>0%</strong></span>
+                                </div>
+                            </div>
+                            <div class="version-list compact" id="version-list">
+                                <p class="empty-state compact">No versions yet</p>
+                            </div>
+                        </div>
+
+                        <div class="card compact">
+                            <h2>Head-to-Head</h2>
+                            <div class="h2h-selector compact">
+                                <select id="h2h-v1"><option value="">V1</option></select>
+                                <span class="vs">VS</span>
+                                <select id="h2h-v2"><option value="">V2</option></select>
+                                <button id="h2h-predict" class="btn small">Go</button>
+                            </div>
+                            <div class="h2h-result" id="h2h-result" style="display: none;">
+                                <div class="h2h-bar"><div class="h2h-v1" id="h2h-v1-bar"></div><div class="h2h-v2" id="h2h-v2-bar"></div></div>
+                                <div class="h2h-labels"><span id="h2h-v1-pct">50%</span><span id="h2h-v2-pct">50%</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
         </main>
+
+        <!-- ========== UNIFIED LOGS DRAWER ========== -->
+        <div id="logs-drawer" class="logs-drawer collapsed">
+            <div class="logs-drawer-header">
+                <div class="logs-drawer-title">
+                    <span>Logs</span>
+                    <div class="logs-filter-buttons">
+                        <button class="log-filter-btn active" data-filter="all">All</button>
+                        <button class="log-filter-btn" data-filter="training">Training</button>
+                        <button class="log-filter-btn" data-filter="scraper">Scraper</button>
+                        <button class="log-filter-btn" data-filter="rl">RL</button>
+                    </div>
+                </div>
+                <div class="logs-drawer-actions">
+                    <button class="btn small" id="btn-clear-logs">Clear</button>
+                    <button class="btn small secondary" id="btn-export-logs">Export</button>
+                    <button class="btn small" id="btn-close-logs">✕</button>
+                </div>
+            </div>
+            <div class="logs-panel" id="logs-panel">
+                <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-level-info">Ready</span></div>
+            </div>
+        </div>
 
         <footer>
             <span>TagadAI - LeekWars Intelligent Combat System</span>
-            <span class="footer-shortcuts">
-                <kbd>Space</kbd> Pause/Resume | <kbd>Esc</kbd> Stop | <kbd>S</kbd> Save
-            </span>
+            <div class="footer-controls">
+                <button class="footer-btn" id="btn-toggle-logs">📋 Logs</button>
+                <span class="footer-shortcuts">
+                    <kbd>Space</kbd> Pause/Resume | <kbd>Esc</kbd> Stop | <kbd>S</kbd> Save
+                </span>
+            </div>
         </footer>
     </div>
 

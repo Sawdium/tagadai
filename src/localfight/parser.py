@@ -90,6 +90,9 @@ class FightResult:
     # Raw data
     raw_actions: list[list]
 
+    # Seed for reproducibility (if available)
+    seed: Optional[int] = None
+
     @property
     def team1_won(self) -> bool:
         return self.winner == 0
@@ -128,6 +131,7 @@ def parse_fight_result(result: dict) -> FightResult:
         entities=fight.get("leeks", []),
         turns=turns,
         raw_actions=raw_actions,
+        seed=result.get("random_seed"),
     )
 
 

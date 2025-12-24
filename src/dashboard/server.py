@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
@@ -42,6 +42,18 @@ except ImportError:
     SCRAPER_AVAILABLE = False
     get_scraper = None
 
+# RL imports
+try:
+    from ..rl.scenarios import load_yaml, ScenarioRunner, ScenarioConfig
+    from ..rl.telemetry import extract_telemetry, aggregate_metrics, telemetry_from_batch
+    from ..localfight.parallel import ParallelRunner, run_parallel
+    from ..localfight.scenario import Scenario
+    from ..localfight.runner import run_fight, check_generator
+    from ..localfight.parser import parse_fight_result
+    RL_AVAILABLE = True
+except ImportError:
+    RL_AVAILABLE = False
+
 
 class TrainingConfig(BaseModel):
     fights: int = 50000
@@ -60,6 +72,167 @@ class MatchRequest(BaseModel):
 
 class ScraperConfig(BaseModel):
     delay: float = 1.0
+
+
+class DuelConfig(BaseModel):
+    bot1: str = "test/ai/simple.leek"
+    bot2: str = "test/ai/simple.leek"
+    seed: Optional[int] = None
+
+
+class ScenarioRunConfig(BaseModel):
+    yaml_path: str
+    max_workers: Optional[int] = None
+
+
+# RL state management
+class RLManager:
+    """Manages RL scenario execution state."""
+
+    def __init__(self):
+        self.is_running = False
+        self.current_scenario: Optional[str] = None
+        self.progress = {"completed": 0, "total": 0, "fights_per_sec": 0.0}
+        self.results: list = []
+        self.telemetry: list = []
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+
+    def run_duel(self, config: DuelConfig) -> dict:
+        """Run a single duel and return results."""
+        if not RL_AVAILABLE:
+            return {"error": "RL module not available"}
+
+        if not check_generator():
+            return {"error": "Generator not available"}
+
+        import random
+        seed = config.seed if config.seed is not None else random.randint(0, 2**31)
+
+        try:
+            scenario = Scenario.create_1v1_pistol(
+                seed=seed,
+                ai1=config.bot1,
+                ai2=config.bot2,
+            )
+            raw_result = run_fight(scenario)
+            result = parse_fight_result(raw_result)
+            telemetry = extract_telemetry(result)
+
+            return {
+                "success": True,
+                "seed": seed,
+                "winner": result.winner,
+                "duration": result.duration,
+                "execution_time_ms": result.execution_time / 1e6,
+                "telemetry": telemetry.to_dict(),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def start_scenario(self, yaml_path: str, max_workers: Optional[int] = None) -> dict:
+        """Start running a scenario file."""
+        if not RL_AVAILABLE:
+            return {"success": False, "error": "RL module not available"}
+
+        if self.is_running:
+            return {"success": False, "error": "Scenario already running"}
+
+        if not Path(yaml_path).exists():
+            return {"success": False, "error": f"File not found: {yaml_path}"}
+
+        self.is_running = True
+        self.current_scenario = yaml_path
+        self._stop_event.clear()
+        self.results = []
+        self.telemetry = []
+        self.progress = {"completed": 0, "total": 0, "fights_per_sec": 0.0}
+
+        self._thread = threading.Thread(
+            target=self._run_scenario,
+            args=(yaml_path, max_workers),
+            daemon=True
+        )
+        self._thread.start()
+
+        return {"success": True, "message": f"Started scenario: {yaml_path}"}
+
+    def _run_scenario(self, yaml_path: str, max_workers: Optional[int]):
+        """Background thread for scenario execution."""
+        import time
+        try:
+            config = load_yaml(yaml_path)
+            if max_workers:
+                config.max_workers = max_workers
+
+            all_scenarios = config.get_all_scenarios()
+            self.progress["total"] = len(all_scenarios)
+
+            start_time = time.time()
+
+            def progress_callback(completed, total, result):
+                if self._stop_event.is_set():
+                    return
+                elapsed = time.time() - start_time
+                self.progress["completed"] = completed
+                self.progress["fights_per_sec"] = completed / elapsed if elapsed > 0 else 0
+
+            runner = ScenarioRunner(config, progress_callback=progress_callback)
+            results = runner.run()
+
+            # Extract telemetry from all results
+            for scenario_result in results:
+                self.results.append({
+                    "name": scenario_result.scenario_name,
+                    "success_count": scenario_result.batch_result.success_count,
+                    "error_count": scenario_result.batch_result.error_count,
+                    "total_time": scenario_result.batch_result.total_time,
+                })
+                self.telemetry.extend(
+                    telemetry_from_batch(scenario_result.batch_result.results)
+                )
+
+        except Exception as e:
+            self.results.append({"error": str(e)})
+        finally:
+            self.is_running = False
+
+    def stop_scenario(self) -> dict:
+        """Stop running scenario."""
+        if not self.is_running:
+            return {"success": False, "error": "No scenario running"}
+
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5.0)
+
+        self.is_running = False
+        return {"success": True, "message": "Scenario stopped"}
+
+    def get_status(self) -> dict:
+        """Get current RL status."""
+        return {
+            "is_running": self.is_running,
+            "current_scenario": self.current_scenario,
+            "progress": self.progress,
+            "results_count": len(self.results),
+            "rl_available": RL_AVAILABLE,
+            "generator_available": check_generator() if RL_AVAILABLE else False,
+        }
+
+    def get_results(self) -> dict:
+        """Get scenario results and aggregated metrics."""
+        if not self.telemetry:
+            return {"results": self.results, "aggregate": {}}
+
+        return {
+            "results": self.results,
+            "aggregate": aggregate_metrics(self.telemetry),
+        }
+
+
+# Global RL manager
+rl_manager = RLManager()
 
 
 # Training state management
@@ -521,6 +694,25 @@ def create_app(metrics: Optional[MetricsCollector] = None) -> FastAPI:
             scraper.pause()
             return {"success": True, "paused": True}
 
+    @app.post("/api/scraper/delay")
+    async def set_scraper_delay(request: Request):
+        """Update scraper delay live (no restart needed)."""
+        if not SCRAPER_AVAILABLE:
+            return {"success": False, "error": "Scraper module not available"}
+        try:
+            body = await request.json()
+            delay = float(body.get("delay", 1.0))
+            if delay < 0.1:
+                return {"success": False, "error": "Delay must be >= 0.1 seconds"}
+            if delay > 60:
+                return {"success": False, "error": "Delay must be <= 60 seconds"}
+            scraper = get_scraper()
+            old_delay = scraper.delay
+            scraper.delay = delay
+            return {"success": True, "old_delay": old_delay, "new_delay": delay}
+        except (ValueError, TypeError) as e:
+            return {"success": False, "error": f"Invalid delay value: {e}"}
+
     @app.get("/api/scraper/database")
     async def get_scraper_database_stats():
         """Get detailed database statistics."""
@@ -592,6 +784,57 @@ def create_app(metrics: Optional[MetricsCollector] = None) -> FastAPI:
             "date_range": scraper.db.get_fight_date_range(),
             "freshness": scraper.db.get_data_freshness_stats(),
         }
+
+    # RL endpoints
+    @app.get("/api/rl/status")
+    async def get_rl_status():
+        """Get RL module status."""
+        return rl_manager.get_status()
+
+    @app.post("/api/rl/duel")
+    async def run_duel(config: DuelConfig):
+        """Run a single duel fight."""
+        return rl_manager.run_duel(config)
+
+    @app.get("/api/rl/scenarios")
+    async def list_scenarios():
+        """List available scenario files."""
+        scenarios_dir = Path(__file__).parent.parent.parent / "scenarios"
+        if not scenarios_dir.exists():
+            return {"scenarios": []}
+
+        scenarios = []
+        for path in scenarios_dir.glob("*.yml"):
+            scenarios.append({
+                "name": path.stem,
+                "path": str(path),
+                "filename": path.name,
+            })
+        return {"scenarios": scenarios}
+
+    @app.post("/api/rl/scenario/run")
+    async def run_scenario(config: ScenarioRunConfig):
+        """Start running a scenario file."""
+        return rl_manager.start_scenario(config.yaml_path, config.max_workers)
+
+    @app.post("/api/rl/scenario/stop")
+    async def stop_scenario():
+        """Stop running scenario."""
+        return rl_manager.stop_scenario()
+
+    @app.get("/api/rl/scenario/progress")
+    async def get_scenario_progress():
+        """Get current scenario progress."""
+        return {
+            "is_running": rl_manager.is_running,
+            "progress": rl_manager.progress,
+            "current_scenario": rl_manager.current_scenario,
+        }
+
+    @app.get("/api/rl/results")
+    async def get_rl_results():
+        """Get scenario results and metrics."""
+        return rl_manager.get_results()
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

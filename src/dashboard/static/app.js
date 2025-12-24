@@ -28,8 +28,13 @@ class Dashboard {
         this.maxReconnectAttempts = 10;
         this.charts = {};
         this.trainingState = 'idle'; // idle, running, paused, completed
+
+        // Unified logging system
         this.logs = [];
         this.maxLogs = 500;
+        this.logFilter = 'all'; // all, training, scraper, rl
+        this.logsDrawerOpen = false;
+
         this.historyData = {
             steps: [],
             trainLoss: [],
@@ -40,11 +45,21 @@ class Dashboard {
         };
         this.dataSource = 'generate'; // 'generate' or 'scraped'
         this.scrapedFightsCount = 0;
+        this.rlInitialized = false;
+        this.rlPollInterval = null;
+        this.rlState = 'idle';
+        this.dataInitialized = false;
 
         this.initCharts();
         this.initControls();
+        this.initTabs();
+        this.initLogsDrawer();
         this.initKeyboardShortcuts();
         this.connect();
+
+        // Load initial data
+        this.loadGpuInfo();
+        this.loadCheckpoints();
     }
 
     initCharts() {
@@ -173,10 +188,6 @@ class Dashboard {
             this.applyPreset(e.target.value);
         });
 
-        // Log buttons
-        document.getElementById('btn-clear-logs')?.addEventListener('click', () => this.clearLogs());
-        document.getElementById('btn-export-logs')?.addEventListener('click', () => this.exportLogs());
-
         // H2H predict button
         document.getElementById('h2h-predict')?.addEventListener('click', () => this.predictH2H());
 
@@ -185,6 +196,7 @@ class Dashboard {
         document.getElementById('btn-scraper-pause')?.addEventListener('click', () => this.pauseScraper());
         document.getElementById('btn-scraper-stop')?.addEventListener('click', () => this.stopScraper());
         document.getElementById('btn-refresh-db-stats')?.addEventListener('click', () => this.loadScraperDbStats());
+        document.getElementById('scraper-delay')?.addEventListener('change', (e) => this.updateScraperDelay(e.target.value));
 
         // Data source selector
         document.getElementById('data-source-select')?.addEventListener('change', (e) => {
@@ -220,12 +232,20 @@ class Dashboard {
                 case 'Escape':
                     if (this.trainingState === 'running' || this.trainingState === 'paused') {
                         this.stopTraining();
+                    } else if (this.logsDrawerOpen) {
+                        this.toggleLogsDrawer();
                     }
                     break;
                 case 'KeyS':
                     if ((e.ctrlKey || e.metaKey) && this.trainingState !== 'idle') {
                         e.preventDefault();
                         this.saveCheckpoint();
+                    }
+                    break;
+                case 'KeyL':
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        this.toggleLogsDrawer();
                     }
                     break;
             }
@@ -347,7 +367,7 @@ class Dashboard {
     }
 
     setConfigInputsEnabled(enabled) {
-        const inputs = document.querySelectorAll('.config-input');
+        const inputs = document.querySelectorAll('.config-compact input');
         inputs.forEach(input => {
             input.disabled = !enabled;
         });
@@ -366,8 +386,8 @@ class Dashboard {
 
     async startTraining() {
         const config = this.getConfig();
-        config.data_source = this.dataSource; // Add data source to config
-        this.addLog('info', `Starting training: ${config.fights} fights, ${config.epochs} epochs (source: ${this.dataSource})`);
+        config.data_source = this.dataSource;
+        this.addLog('training', 'info', `Starting training: ${config.fights} fights, ${config.epochs} epochs (source: ${this.dataSource})`);
 
         try {
             const response = await fetch('/api/training/start', {
@@ -379,14 +399,14 @@ class Dashboard {
             const result = await response.json();
             if (result.success) {
                 this.setTrainingState('running');
-                this.addLog('success', 'Training started successfully');
+                this.addLog('training', 'success', 'Training started successfully');
                 this.notify('success', 'Training Started', `${config.fights.toLocaleString()} fights, ${config.epochs} epochs`);
             } else {
-                this.addLog('error', `Failed to start: ${result.error}`);
+                this.addLog('training', 'error', `Failed to start: ${result.error}`);
                 this.notify('error', 'Failed to Start', result.error);
             }
         } catch (error) {
-            this.addLog('error', `Failed to start training: ${error.message}`);
+            this.addLog('training', 'error', `Failed to start training: ${error.message}`);
             this.notify('error', 'Error', error.message);
         }
     }
@@ -399,16 +419,16 @@ class Dashboard {
             if (result.success) {
                 if (this.trainingState === 'paused') {
                     this.setTrainingState('running');
-                    this.addLog('info', 'Training resumed');
+                    this.addLog('training', 'info', 'Training resumed');
                     this.notify('info', 'Resumed', 'Training resumed');
                 } else {
                     this.setTrainingState('paused');
-                    this.addLog('warning', 'Training paused');
+                    this.addLog('training', 'warning', 'Training paused');
                     this.notify('warning', 'Paused', 'Training paused. Press Space to resume.');
                 }
             }
         } catch (error) {
-            this.addLog('error', `Failed to pause: ${error.message}`);
+            this.addLog('training', 'error', `Failed to pause: ${error.message}`);
         }
     }
 
@@ -423,15 +443,15 @@ class Dashboard {
 
             if (result.success) {
                 this.setTrainingState('idle');
-                this.addLog('warning', 'Training stopped');
+                this.addLog('training', 'warning', 'Training stopped');
                 this.notify('warning', 'Training Stopped', 'Training has been stopped.');
                 if (result.checkpoint) {
-                    this.addLog('success', `Checkpoint saved: ${result.checkpoint}`);
+                    this.addLog('training', 'success', `Checkpoint saved: ${result.checkpoint}`);
                     this.notify('success', 'Checkpoint Saved', result.checkpoint);
                 }
             }
         } catch (error) {
-            this.addLog('error', `Failed to stop: ${error.message}`);
+            this.addLog('training', 'error', `Failed to stop: ${error.message}`);
         }
     }
 
@@ -441,15 +461,15 @@ class Dashboard {
             const result = await response.json();
 
             if (result.success) {
-                this.addLog('success', `Checkpoint saved: ${result.name}`);
+                this.addLog('training', 'success', `Checkpoint saved: ${result.name}`);
                 this.notify('success', 'Checkpoint Saved', result.name);
                 this.loadCheckpoints();
             } else {
-                this.addLog('error', `Failed to save: ${result.error}`);
+                this.addLog('training', 'error', `Failed to save: ${result.error}`);
                 this.notify('error', 'Save Failed', result.error);
             }
         } catch (error) {
-            this.addLog('error', `Failed to save checkpoint: ${error.message}`);
+            this.addLog('training', 'error', `Failed to save checkpoint: ${error.message}`);
         }
     }
 
@@ -462,7 +482,7 @@ class Dashboard {
         const banner = document.getElementById('status-banner');
 
         // Reset classes
-        banner.className = 'status-banner';
+        banner.className = 'control-status';
 
         switch (state) {
             case 'idle':
@@ -508,26 +528,76 @@ class Dashboard {
         this.setConfigInputsEnabled(state === 'idle');
     }
 
-    // Logging
-    addLog(level, message) {
+    // ========== UNIFIED LOGGING SYSTEM ==========
+
+    initLogsDrawer() {
+        // Toggle button
+        document.getElementById('btn-toggle-logs')?.addEventListener('click', () => this.toggleLogsDrawer());
+        document.getElementById('btn-close-logs')?.addEventListener('click', () => this.toggleLogsDrawer());
+
+        // Log controls
+        document.getElementById('btn-clear-logs')?.addEventListener('click', () => this.clearLogs());
+        document.getElementById('btn-export-logs')?.addEventListener('click', () => this.exportLogs());
+
+        // Filter buttons
+        document.querySelectorAll('.log-filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.logFilter = btn.dataset.filter;
+                this.updateLogsDisplay();
+            });
+        });
+    }
+
+    toggleLogsDrawer() {
+        const drawer = document.getElementById('logs-drawer');
+        const btn = document.getElementById('btn-toggle-logs');
+
+        this.logsDrawerOpen = !this.logsDrawerOpen;
+
+        if (this.logsDrawerOpen) {
+            drawer.classList.remove('collapsed');
+            drawer.classList.add('open');
+        } else {
+            drawer.classList.remove('open');
+            drawer.classList.add('collapsed');
+        }
+
+        if (btn) {
+            btn.textContent = this.logsDrawerOpen ? '📋 Hide Logs' : '📋 Logs';
+        }
+    }
+
+    addLog(category, level, message) {
         const now = new Date();
         const time = now.toTimeString().slice(0, 8);
 
-        this.logs.push({ time, level, message });
+        this.logs.push({ time, category, level, message });
         if (this.logs.length > this.maxLogs) {
             this.logs.shift();
         }
 
         this.updateLogsDisplay();
+
+        // Also update scraper activity panel if it's a scraper log
+        if (category === 'scraper') {
+            this.updateScraperActivity(time, level, message);
+        }
     }
 
     updateLogsDisplay() {
         const panel = document.getElementById('logs-panel');
         if (!panel) return;
 
-        panel.innerHTML = this.logs.map(log => `
-            <div class="log-entry">
+        const filtered = this.logFilter === 'all'
+            ? this.logs
+            : this.logs.filter(log => log.category === this.logFilter);
+
+        panel.innerHTML = filtered.map(log => `
+            <div class="log-entry" data-category="${log.category}">
                 <span class="log-time">${log.time}</span>
+                <span class="log-category">[${log.category}]</span>
                 <span class="log-level-${log.level}">${log.message}</span>
             </div>
         `).join('');
@@ -536,18 +606,38 @@ class Dashboard {
         panel.scrollTop = panel.scrollHeight;
     }
 
+    updateScraperActivity(time, level, message) {
+        const panel = document.getElementById('scraper-activity-panel');
+        if (!panel) return;
+
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        entry.innerHTML = `
+            <span class="log-time">${time}</span>
+            <span class="log-level-${level}">${message}</span>
+        `;
+
+        panel.appendChild(entry);
+        panel.scrollTop = panel.scrollHeight;
+
+        // Keep size reasonable
+        while (panel.children.length > 50) {
+            panel.removeChild(panel.firstChild);
+        }
+    }
+
     clearLogs() {
         this.logs = [];
-        this.addLog('info', 'Logs cleared');
+        this.addLog('training', 'info', 'Logs cleared');
     }
 
     exportLogs() {
-        const text = this.logs.map(l => `[${l.time}] [${l.level.toUpperCase()}] ${l.message}`).join('\n');
+        const text = this.logs.map(l => `[${l.time}] [${l.category.toUpperCase()}] [${l.level.toUpperCase()}] ${l.message}`).join('\n');
         const blob = new Blob([text], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `training-logs-${new Date().toISOString().slice(0, 10)}.txt`;
+        a.download = `tagadai-logs-${new Date().toISOString().slice(0, 10)}.txt`;
         a.click();
         URL.revokeObjectURL(url);
     }
@@ -568,7 +658,7 @@ class Dashboard {
             indicator.classList.remove('connecting');
             indicator.classList.add('connected');
             this.reconnectAttempts = 0;
-            this.addLog('success', 'Connected to server');
+            this.addLog('training', 'success', 'Connected to server');
         };
 
         this.ws.onmessage = (event) => {
@@ -579,7 +669,7 @@ class Dashboard {
         this.ws.onclose = () => {
             console.log('WebSocket disconnected');
             indicator.classList.remove('connected', 'connecting');
-            this.addLog('warning', 'Disconnected from server');
+            this.addLog('training', 'warning', 'Disconnected from server');
             this.scheduleReconnect();
         };
 
@@ -797,7 +887,7 @@ class Dashboard {
         }
     }
 
-    // Tab handling
+    // ========== TAB HANDLING ==========
     initTabs() {
         const tabBtns = document.querySelectorAll('.tab-btn');
         tabBtns.forEach(btn => {
@@ -818,23 +908,42 @@ class Dashboard {
         });
 
         // Load data for the tab
-        if (tabId === 'versions') {
-            this.loadVersions();
-        } else if (tabId === 'arena') {
-            this.loadArena();
-        } else if (tabId === 'control') {
+        if (tabId === 'training') {
             this.loadCheckpoints();
+            this.loadGpuInfo();
+        } else if (tabId === 'models') {
+            this.loadVersions();
+            this.loadArena();
         } else if (tabId === 'scraper') {
             this.loadScraperStatus();
             this.loadScraperDbStats();
             this.startScraperPolling();
-            this.initAnalytics();
+        } else if (tabId === 'data') {
+            if (!this.dataInitialized) {
+                this.initAnalytics();
+                this.dataInitialized = true;
+            }
+            this.loadLevelDistribution();
+            this.loadExplorationStats();
+            this.loadDateDistribution();
+        } else if (tabId === 'rl') {
+            if (!this.rlInitialized) {
+                this.initRL();
+                this.rlInitialized = true;
+            }
+            this.loadRLResults();
         }
 
         // Stop scraper polling when leaving scraper tab
         if (tabId !== 'scraper' && this.scraperPollInterval) {
             clearInterval(this.scraperPollInterval);
             this.scraperPollInterval = null;
+        }
+
+        // Stop RL polling when leaving RL tab
+        if (tabId !== 'rl' && this.rlPollInterval) {
+            clearInterval(this.rlPollInterval);
+            this.rlPollInterval = null;
         }
     }
 
@@ -847,7 +956,6 @@ class Dashboard {
             const gpuStatus = document.getElementById('gpu-status');
             const gpuName = document.getElementById('gpu-name');
             const gpuMemory = document.getElementById('gpu-memory');
-            const gpuMemoryBar = document.getElementById('gpu-memory-bar');
             const gpuUtil = document.getElementById('gpu-util');
 
             if (data.cuda_available) {
@@ -889,7 +997,7 @@ class Dashboard {
             if (!listEl) return;
 
             if (!data.checkpoints || data.checkpoints.length === 0) {
-                listEl.innerHTML = '<p class="empty-state">No checkpoints yet. Start training to create one.</p>';
+                listEl.innerHTML = '<p class="empty-state compact">No checkpoints yet. Start training to create one.</p>';
                 return;
             }
 
@@ -902,7 +1010,6 @@ class Dashboard {
                         <span class="checkpoint-date">${cp.created_at}</span>
                     </div>
                     <div class="checkpoint-actions">
-                        <button class="btn small" onclick="dashboard.loadCheckpoint('${cp.id}')">Load</button>
                         <button class="btn small danger" onclick="dashboard.deleteCheckpoint('${cp.id}')">Delete</button>
                     </div>
                 </div>
@@ -912,34 +1019,15 @@ class Dashboard {
         }
     }
 
-    async loadCheckpoint(id) {
-        if (!confirm('Load this checkpoint? Current training state will be replaced.')) {
-            return;
-        }
-
-        try {
-            const response = await fetch(`/api/checkpoints/${id}/load`, { method: 'POST' });
-            const result = await response.json();
-
-            if (result.success) {
-                this.addLog('success', `Loaded checkpoint: ${result.name}`);
-            } else {
-                this.addLog('error', `Failed to load: ${result.error}`);
-            }
-        } catch (error) {
-            this.addLog('error', `Failed to load checkpoint: ${error.message}`);
-        }
-    }
-
     async deleteCheckpoint(id) {
         if (!confirm('Delete this checkpoint?')) return;
 
         try {
             await fetch(`/api/checkpoints/${id}`, { method: 'DELETE' });
             this.loadCheckpoints();
-            this.addLog('info', 'Checkpoint deleted');
+            this.addLog('training', 'info', 'Checkpoint deleted');
         } catch (error) {
-            this.addLog('error', `Failed to delete: ${error.message}`);
+            this.addLog('training', 'error', `Failed to delete: ${error.message}`);
         }
     }
 
@@ -959,8 +1047,7 @@ class Dashboard {
             if (versionStats) {
                 versionStats.innerHTML = `
                     <span>Total: <strong>${stats.total_versions || 0}</strong></span>
-                    <span>Champion: <strong>${stats.champion || '--'}</strong></span>
-                    <span>Best Accuracy: <strong>${((stats.highest_accuracy || 0) * 100).toFixed(1)}%</strong></span>
+                    <span>Best: <strong>${((stats.highest_accuracy || 0) * 100).toFixed(1)}%</strong></span>
                 `;
             }
 
@@ -968,7 +1055,7 @@ class Dashboard {
             if (!listEl) return;
 
             if (!data.versions || data.versions.length === 0) {
-                listEl.innerHTML = '<p class="empty-state">No versions yet. Train a model to create one.</p>';
+                listEl.innerHTML = '<p class="empty-state compact">No versions yet. Train a model to create one.</p>';
                 return;
             }
 
@@ -1045,7 +1132,7 @@ class Dashboard {
             if (!tbody) return;
 
             if (!data.leaderboard || data.leaderboard.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No versions in arena yet.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state compact">No versions in arena yet.</td></tr>';
                 return;
             }
 
@@ -1098,6 +1185,307 @@ class Dashboard {
         }
     }
 
+    // ========== RL METHODS ==========
+
+    initRL() {
+        // RL control buttons
+        document.getElementById('btn-rl-duel')?.addEventListener('click', () => this.runDuel());
+        document.getElementById('btn-rl-start')?.addEventListener('click', () => this.startScenario());
+        document.getElementById('btn-rl-stop')?.addEventListener('click', () => this.stopScenario());
+
+        // Load scenarios
+        this.loadScenarios();
+
+        // Poll status
+        this.rlPollInterval = null;
+        this.rlState = 'idle';
+    }
+
+    async loadScenarios() {
+        try {
+            const response = await fetch('/api/rl/scenarios');
+            const data = await response.json();
+
+            const select = document.getElementById('rl-scenario-select');
+            if (!select) return;
+
+            select.innerHTML = '<option value="">Select scenario...</option>';
+            if (data.scenarios && data.scenarios.length > 0) {
+                for (const scenario of data.scenarios) {
+                    const opt = document.createElement('option');
+                    opt.value = scenario.path;
+                    opt.textContent = scenario.name;
+                    select.appendChild(opt);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load scenarios:', error);
+        }
+    }
+
+    async runDuel() {
+        const bot1 = document.getElementById('rl-bot1')?.value || 'test/ai/simple.leek';
+        const bot2 = document.getElementById('rl-bot2')?.value || 'test/ai/simple.leek';
+        const seedInput = document.getElementById('rl-seed');
+        const seed = seedInput?.value ? parseInt(seedInput.value) : null;
+
+        this.addLog('rl', 'info', `Running duel: ${bot1} vs ${bot2}${seed ? ` (seed: ${seed})` : ''}`);
+
+        try {
+            const response = await fetch('/api/rl/duel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bot1, bot2, seed })
+            });
+
+            const result = await response.json();
+
+            if (result.error) {
+                this.addLog('rl', 'error', `Duel failed: ${result.error}`);
+                this.notify('error', 'Duel Failed', result.error);
+                return;
+            }
+
+            // Show result
+            const resultEl = document.getElementById('duel-result');
+            const outcomeEl = document.getElementById('duel-outcome');
+            const durationEl = document.getElementById('duel-duration');
+            const timeEl = document.getElementById('duel-time');
+
+            if (resultEl) resultEl.style.display = 'block';
+
+            const outcomes = { 0: 'Bot 1 wins!', 1: 'Bot 2 wins!', '-1': 'Draw' };
+            if (outcomeEl) {
+                outcomeEl.textContent = outcomes[result.winner] || 'Unknown';
+                outcomeEl.className = 'duel-outcome ' + (result.winner === 0 ? 'win' : result.winner === 1 ? 'loss' : 'draw');
+            }
+            if (durationEl) durationEl.textContent = result.duration || '--';
+            if (timeEl) timeEl.textContent = result.execution_time_ms ? result.execution_time_ms.toFixed(1) : '--';
+
+            // Show telemetry if available
+            if (result.telemetry) {
+                this.displayTelemetry(result.telemetry);
+            }
+
+            this.addLog('rl', 'success', `Duel complete: ${outcomes[result.winner]}`);
+            this.notify('success', 'Duel Complete', outcomes[result.winner] || 'Unknown result');
+
+        } catch (error) {
+            this.addLog('rl', 'error', `Error: ${error.message}`);
+            this.notify('error', 'Error', error.message);
+        }
+    }
+
+    displayTelemetry(telemetry) {
+        const container = document.getElementById('telemetry-display');
+        if (!container) return;
+
+        let html = '';
+        html += `<div class="telemetry-summary">`;
+        html += `<div class="stat-compact"><span class="label">Turns</span><span class="value">${telemetry.total_turns || '--'}</span></div>`;
+        html += `<div class="stat-compact"><span class="label">Winner</span><span class="value">Team ${(telemetry.winner || 0) + 1}</span></div>`;
+        html += `</div>`;
+
+        if (telemetry.agent_metrics) {
+            html += `<div class="telemetry-agents">`;
+            for (const [id, metrics] of Object.entries(telemetry.agent_metrics)) {
+                html += `<div class="agent-metrics">`;
+                html += `<div class="agent-name">${metrics.name} (T${metrics.team})</div>`;
+                html += `<div class="agent-stats">`;
+                html += `<span>DMG: ${metrics.total_damage_dealt || 0}</span>`;
+                html += `<span>HP: ${metrics.final_hp || 0}/${metrics.max_hp || 0}</span>`;
+                html += `<span>Eff: ${(metrics.tp_efficiency * 100 || 0).toFixed(0)}%</span>`;
+                html += `</div></div>`;
+            }
+            html += `</div>`;
+        }
+
+        container.innerHTML = html;
+    }
+
+    async startScenario() {
+        const select = document.getElementById('rl-scenario-select');
+        const workersInput = document.getElementById('rl-workers');
+        const yamlPath = select?.value;
+        const workers = parseInt(workersInput?.value) || 4;
+
+        if (!yamlPath) {
+            this.notify('warning', 'No Scenario', 'Please select a scenario file');
+            return;
+        }
+
+        this.addLog('rl', 'info', `Starting scenario: ${yamlPath} (workers: ${workers})`);
+
+        try {
+            const response = await fetch('/api/rl/scenario/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ yaml_path: yamlPath, max_workers: workers })
+            });
+
+            const result = await response.json();
+
+            if (result.error) {
+                this.addLog('rl', 'error', `Failed: ${result.error}`);
+                this.notify('error', 'Scenario Failed', result.error);
+                return;
+            }
+
+            this.setRLState('running');
+            this.addLog('rl', 'success', 'Scenario started');
+            this.notify('success', 'Scenario Started', `Running ${yamlPath}`);
+
+            // Start polling progress
+            this.startRLPolling();
+
+        } catch (error) {
+            this.addLog('rl', 'error', `Error: ${error.message}`);
+            this.notify('error', 'Error', error.message);
+        }
+    }
+
+    async stopScenario() {
+        try {
+            const response = await fetch('/api/rl/scenario/stop', { method: 'POST' });
+            const result = await response.json();
+
+            if (result.success) {
+                this.setRLState('idle');
+                this.addLog('rl', 'info', 'Scenario stopped');
+                this.stopRLPolling();
+            }
+        } catch (error) {
+            this.addLog('rl', 'error', `Error: ${error.message}`);
+        }
+    }
+
+    setRLState(state) {
+        this.rlState = state;
+
+        const btnDuel = document.getElementById('btn-rl-duel');
+        const btnStart = document.getElementById('btn-rl-start');
+        const btnStop = document.getElementById('btn-rl-stop');
+        const banner = document.getElementById('rl-status-banner');
+        const icon = document.getElementById('rl-status-icon');
+        const title = document.getElementById('rl-banner-title');
+        const subtitle = document.getElementById('rl-banner-subtitle');
+        const progressRow = document.getElementById('rl-progress-row');
+
+        banner?.classList.remove('running', 'paused');
+
+        if (state === 'running') {
+            if (btnDuel) btnDuel.disabled = true;
+            if (btnStart) btnStart.disabled = true;
+            if (btnStop) btnStop.disabled = false;
+            banner?.classList.add('running');
+            if (icon) icon.textContent = '🏃';
+            if (title) title.textContent = 'Running';
+            if (subtitle) subtitle.textContent = 'Scenario in progress...';
+            if (progressRow) progressRow.style.display = 'flex';
+        } else {
+            if (btnDuel) btnDuel.disabled = false;
+            if (btnStart) btnStart.disabled = false;
+            if (btnStop) btnStop.disabled = true;
+            if (icon) icon.textContent = '⏸️';
+            if (title) title.textContent = 'Idle';
+            if (subtitle) subtitle.textContent = 'Ready';
+            if (progressRow) progressRow.style.display = 'none';
+        }
+    }
+
+    startRLPolling() {
+        if (this.rlPollInterval) return;
+        this.rlPollInterval = setInterval(() => this.loadRLProgress(), 1000);
+    }
+
+    stopRLPolling() {
+        if (this.rlPollInterval) {
+            clearInterval(this.rlPollInterval);
+            this.rlPollInterval = null;
+        }
+    }
+
+    async loadRLProgress() {
+        try {
+            const response = await fetch('/api/rl/scenario/progress');
+            const data = await response.json();
+
+            // FIXED: Properly parse progress object
+            const progress = data.progress || {};
+            const completed = progress.completed || 0;
+            const total = progress.total || 0;
+            const pct = total > 0 ? (completed / total * 100) : 0;
+
+            // Update progress bar
+            const progressBar = document.getElementById('rl-progress-bar');
+            const progressCount = document.getElementById('rl-progress-count');
+
+            if (progressBar) progressBar.style.width = `${pct}%`;
+            if (progressCount) progressCount.textContent = `${completed} / ${total}`;
+
+            // Update metrics
+            const fightsEl = document.getElementById('rl-metric-fights');
+            const speedEl = document.getElementById('rl-metric-speed');
+
+            if (fightsEl) fightsEl.textContent = completed;
+            if (speedEl) speedEl.textContent = progress.fights_per_sec ? progress.fights_per_sec.toFixed(1) : '--';
+
+            // Update ETA
+            const etaEl = document.getElementById('rl-eta');
+            if (etaEl && progress.fights_per_sec > 0 && total > completed) {
+                const remaining = total - completed;
+                const etaSecs = remaining / progress.fights_per_sec;
+                etaEl.textContent = etaSecs > 60 ? `${(etaSecs / 60).toFixed(1)}m` : `${etaSecs.toFixed(0)}s`;
+            } else if (etaEl) {
+                etaEl.textContent = '--';
+            }
+
+            // Check if done
+            if (!data.is_running && this.rlState === 'running') {
+                this.setRLState('idle');
+                this.stopRLPolling();
+                this.addLog('rl', 'success', 'Scenario completed');
+                this.loadRLResults();
+            }
+
+        } catch (error) {
+            console.error('Failed to load RL progress:', error);
+        }
+    }
+
+    async loadRLResults() {
+        try {
+            const response = await fetch('/api/rl/results');
+            const data = await response.json();
+
+            const container = document.getElementById('scenario-results');
+            if (!container) return;
+
+            if (!data.results || data.results.length === 0) {
+                container.innerHTML = '<p class="empty-state compact">No results yet</p>';
+                return;
+            }
+
+            let html = '';
+            for (const result of data.results) {
+                const successCount = result.success_count || 0;
+                const errorCount = result.error_count || 0;
+                const totalCount = successCount + errorCount;
+
+                html += `<div class="scenario-result">`;
+                html += `<div class="scenario-name">${result.name}</div>`;
+                html += `<div class="scenario-stats">`;
+                html += `<span>Fights: ${successCount}/${totalCount}</span>`;
+                html += `<span>Time: ${result.total_time?.toFixed(1) || '--'}s</span>`;
+                html += `</div></div>`;
+            }
+            container.innerHTML = html;
+
+        } catch (error) {
+            console.error('Failed to load RL results:', error);
+        }
+    }
+
     // ========== SCRAPER METHODS ==========
 
     getScraperConfig() {
@@ -1108,7 +1496,7 @@ class Dashboard {
 
     async startScraper() {
         const config = this.getScraperConfig();
-        this.addScraperLog('info', `Starting scraper: delay=${config.delay}s`);
+        this.addLog('scraper', 'info', `Starting scraper: delay=${config.delay}s`);
 
         try {
             const response = await fetch('/api/scraper/start', {
@@ -1120,15 +1508,15 @@ class Dashboard {
             const result = await response.json();
             if (result.success) {
                 this.setScraperState('running');
-                this.addScraperLog('success', 'Scraper started successfully');
+                this.addLog('scraper', 'success', 'Scraper started successfully');
                 this.notify('success', 'Scraper Started', `Delay: ${config.delay}s`);
                 this.startScraperPolling();
             } else {
-                this.addScraperLog('error', `Failed to start: ${result.error}`);
+                this.addLog('scraper', 'error', `Failed to start: ${result.error}`);
                 this.notify('error', 'Scraper Failed', result.error);
             }
         } catch (error) {
-            this.addScraperLog('error', `Error: ${error.message}`);
+            this.addLog('scraper', 'error', `Error: ${error.message}`);
             this.notify('error', 'Error', error.message);
         }
     }
@@ -1139,11 +1527,11 @@ class Dashboard {
             const result = await response.json();
             if (result.success) {
                 this.setScraperState(result.paused ? 'paused' : 'running');
-                this.addScraperLog('info', result.paused ? 'Scraper paused' : 'Scraper resumed');
+                this.addLog('scraper', 'info', result.paused ? 'Scraper paused' : 'Scraper resumed');
                 this.notify('info', result.paused ? 'Scraper Paused' : 'Scraper Resumed', '');
             }
         } catch (error) {
-            this.addScraperLog('error', `Error: ${error.message}`);
+            this.addLog('scraper', 'error', `Error: ${error.message}`);
         }
     }
 
@@ -1153,10 +1541,35 @@ class Dashboard {
             const result = await response.json();
             if (result.success) {
                 this.setScraperState('idle');
-                this.addScraperLog('info', 'Scraper stopped');
+                this.addLog('scraper', 'info', 'Scraper stopped');
             }
         } catch (error) {
-            this.addScraperLog('error', `Error: ${error.message}`);
+            this.addLog('scraper', 'error', `Error: ${error.message}`);
+        }
+    }
+
+    async updateScraperDelay(delay) {
+        // Set flag to prevent polling from overwriting user input
+        this.delayUserEdit = true;
+
+        try {
+            const response = await fetch('/api/scraper/delay', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ delay: parseFloat(delay) })
+            });
+            const result = await response.json();
+            if (result.success) {
+                this.addLog('scraper', 'info', `Delay updated: ${result.old_delay}s → ${result.new_delay}s`);
+                // Clear flag after a delay to let the next poll catch up with the new value
+                setTimeout(() => { this.delayUserEdit = false; }, 3000);
+            } else {
+                this.addLog('scraper', 'error', `Failed to update delay: ${result.error}`);
+                this.delayUserEdit = false;
+            }
+        } catch (error) {
+            this.addLog('scraper', 'error', `Error updating delay: ${error.message}`);
+            this.delayUserEdit = false;
         }
     }
 
@@ -1251,6 +1664,12 @@ class Dashboard {
             document.getElementById('stat-avg-request-time').textContent = data.avg_request_time ? `${data.avg_request_time}s` : '--';
             document.getElementById('stat-current-action').textContent = data.current_action || 'Idle';
 
+            // Sync delay input with server value (only if not recently changed by user)
+            const delayInput = document.getElementById('scraper-delay');
+            if (delayInput && !this.delayUserEdit && data.delay !== undefined) {
+                delayInput.value = data.delay;
+            }
+
             // Show rate limit indicator if any 429s hit
             const rateLimitEl = document.getElementById('stat-rate-limit');
             const rateLimitHitsEl = document.getElementById('stat-rate-limit-hits');
@@ -1275,7 +1694,7 @@ class Dashboard {
                 }
             }
 
-            // Also fetch db stats for leek observations
+            // Also fetch db stats
             this.loadScraperDbStats();
 
         } catch (error) {
@@ -1322,12 +1741,15 @@ class Dashboard {
             html += `<div class="stat-compact"><span class="label">Players</span><span class="value">${data.players_scraped || 0}</span></div>`;
             html += `<div class="stat-compact"><span class="label">Leeks</span><span class="value">${data.unique_leeks || 0}</span></div>`;
 
+            // Add DB size
+            if (data.db_size_mb !== undefined) {
+                html += `<div class="stat-compact"><span class="label">DB Size</span><span class="value">${data.db_size_mb.toFixed(1)} MB</span></div>`;
+            }
+
             container.innerHTML = html;
 
             // Also update the stats panel elements
-            const leeksObserved = document.getElementById('stat-leeks-observed');
             const discoveryQueue = document.getElementById('stat-discovery-queue');
-            if (leeksObserved) leeksObserved.textContent = data.unique_leeks || 0;
             if (discoveryQueue) discoveryQueue.textContent = data.discovery_queue || 0;
 
         } catch (error) {
@@ -1335,30 +1757,7 @@ class Dashboard {
         }
     }
 
-    addScraperLog(level, message) {
-        const panel = document.getElementById('scraper-logs-panel');
-        if (!panel) return;
-
-        const now = new Date().toLocaleTimeString();
-        const levelClass = `log-level-${level}`;
-
-        const entry = document.createElement('div');
-        entry.className = 'log-entry';
-        entry.innerHTML = `
-            <span class="log-time">${now}</span>
-            <span class="${levelClass}">${message}</span>
-        `;
-
-        panel.appendChild(entry);
-        panel.scrollTop = panel.scrollHeight;
-
-        // Keep log size reasonable
-        while (panel.children.length > 100) {
-            panel.removeChild(panel.firstChild);
-        }
-    }
-
-    // ========== ANALYTICS METHODS ==========
+    // ========== ANALYTICS METHODS (DATA TAB) ==========
 
     initAnalytics() {
         // Level distribution chart filter
@@ -1382,19 +1781,12 @@ class Dashboard {
                 this.loadDateDistribution();
             });
         }
-
-        // Load initial data
-        this.loadLevelDistribution();
-        this.loadExplorationStats();
-        this.loadDateDistribution();
     }
 
     async loadExplorationStats() {
-        console.log('Loading exploration stats...');
         try {
             const response = await fetch('/api/scraper/analytics/exploration');
             const data = await response.json();
-            console.log('Exploration data:', data);
 
             if (data.error) {
                 console.error('Exploration stats error:', data.error);
@@ -1403,15 +1795,20 @@ class Dashboard {
 
             // Tournament exploration stats
             const tournaments = data.tournaments || {};
-            document.getElementById('tournaments-explored').textContent = tournaments.tournaments_explored || 0;
-            document.getElementById('tournament-leeks').textContent = tournaments.leeks_from_tournaments || 0;
-            document.getElementById('tournament-low-level').textContent = tournaments.low_level_from_tournaments || 0;
+            const tournamentsEl = document.getElementById('tournaments-explored');
+            const leeksEl = document.getElementById('tournament-leeks');
+            const lowLevelEl = document.getElementById('tournament-low-level');
+            const dateRangeEl = document.getElementById('tournament-date-range');
+
+            if (tournamentsEl) tournamentsEl.textContent = tournaments.tournaments_explored || 0;
+            if (leeksEl) leeksEl.textContent = tournaments.leeks_from_tournaments || 0;
+            if (lowLevelEl) lowLevelEl.textContent = tournaments.low_level_from_tournaments || 0;
 
             // Date range
-            if (tournaments.oldest_date && tournaments.newest_date) {
+            if (dateRangeEl && tournaments.oldest_date && tournaments.newest_date) {
                 const oldest = new Date(tournaments.oldest_date * 1000).toLocaleDateString();
                 const newest = new Date(tournaments.newest_date * 1000).toLocaleDateString();
-                document.getElementById('tournament-date-range').textContent = `${oldest} - ${newest}`;
+                dateRangeEl.textContent = `${oldest} - ${newest}`;
             }
 
             // Level 301 ratio indicator
@@ -1436,19 +1833,14 @@ class Dashboard {
     }
 
     renderLevelBrackets(brackets) {
-        console.log('renderLevelBrackets called with:', brackets);
         const container = document.getElementById('bracket-bars');
-        if (!container) {
-            console.error('bracket-bars container not found');
-            return;
-        }
+        if (!container) return;
 
         // Calculate total
         let total = 0;
         for (const bracket in brackets) {
             total += brackets[bracket].count || 0;
         }
-        console.log('Total bracket count:', total);
 
         if (total === 0) {
             container.innerHTML = '<span style="padding: 4px;">No data</span>';
@@ -1509,6 +1901,10 @@ class Dashboard {
         // Destroy existing chart
         if (this.levelChart) {
             this.levelChart.destroy();
+        }
+
+        if (!distribution || distribution.length === 0) {
+            return;
         }
 
         const labels = distribution.map(d => `Lvl ${d.level}`);
@@ -1720,8 +2116,6 @@ class Dashboard {
         const bucket = bucketSelect?.value || 'month';
         const url = `/api/scraper/analytics/dates?bucket=${bucket}`;
 
-        console.log('Loading date distribution with bucket:', bucket);
-
         try {
             const response = await fetch(url);
             if (!response.ok) {
@@ -1729,56 +2123,30 @@ class Dashboard {
                 return;
             }
             const data = await response.json();
-            console.log('Date distribution data:', data);
 
             if (data.error) {
                 console.error('Date distribution error:', data.error);
                 return;
             }
 
-            // Update date range info
-            const rangeInfo = document.getElementById('date-range-info');
-            if (rangeInfo && data.date_range) {
-                const oldest = data.date_range.oldest ? new Date(data.date_range.oldest * 1000).toLocaleDateString() : '--';
-                const newest = data.date_range.newest ? new Date(data.date_range.newest * 1000).toLocaleDateString() : '--';
-                rangeInfo.textContent = `${oldest} - ${newest}`;
-            }
-
-            // Update freshness bar
+            // Update freshness badges
             if (data.freshness) {
-                this.updateFreshnessBar(data.freshness);
+                this.updateFreshnessBadges(data.freshness);
             }
 
-            this.renderDateChart(data.distribution, bucket, data.freshness);
+            this.renderDateChart(data.distribution, bucket);
         } catch (error) {
             console.error('Failed to load date distribution:', error);
         }
     }
 
-    updateFreshnessBar(freshness) {
-        const oldBar = document.getElementById('freshness-old');
-        const recentBar = document.getElementById('freshness-recent');
-        const oldCount = document.getElementById('freshness-old-count');
-        const recentCount = document.getElementById('freshness-recent-count');
-        const oldPct = document.getElementById('freshness-old-pct');
-        const recentPct = document.getElementById('freshness-recent-pct');
-
-        const oldRatio = freshness.old_ratio || 0;
-        const recentRatio = freshness.recent_ratio || 0;
-
-        if (oldBar && recentBar) {
-            oldBar.style.flex = oldRatio;
-            recentBar.style.flex = recentRatio;
-        }
-
-        if (oldCount) oldCount.textContent = (freshness.old_count || 0).toLocaleString();
-        if (recentCount) recentCount.textContent = (freshness.recent_count || 0).toLocaleString();
-        if (oldPct) oldPct.textContent = (oldRatio * 100).toFixed(1);
-        if (recentPct) recentPct.textContent = (recentRatio * 100).toFixed(1);
-
-        // Update freshness badges
+    updateFreshnessBadges(freshness) {
         const recentBadge = document.getElementById('freshness-recent-badge');
         const oldBadge = document.getElementById('freshness-old-badge');
+
+        const recentRatio = freshness.recent_ratio || 0;
+        const oldRatio = freshness.old_ratio || 0;
+
         if (recentBadge) {
             recentBadge.textContent = `${(recentRatio * 100).toFixed(0)}% new`;
         }
@@ -1809,12 +2177,9 @@ class Dashboard {
         }
     }
 
-    renderDateChart(distribution, bucket, freshness) {
+    renderDateChart(distribution, bucket) {
         const ctx = document.getElementById('date-distribution-chart');
-        if (!ctx) {
-            console.error('Date chart canvas not found');
-            return;
-        }
+        if (!ctx) return;
 
         // Destroy existing chart
         if (this.dateChart) {
@@ -1822,11 +2187,8 @@ class Dashboard {
         }
 
         if (!distribution || distribution.length === 0) {
-            console.warn('No date distribution data to render');
             return;
         }
-
-        console.log('Rendering date chart with', distribution.length, 'periods');
 
         const labels = distribution.map(d => d.period);
         const counts = distribution.map(d => d.count);
@@ -1936,7 +2298,5 @@ class Dashboard {
 document.addEventListener('DOMContentLoaded', () => {
     window.dashboard = new Dashboard();
     window.dashboard.loadHistory();
-    window.dashboard.initTabs();
-    window.dashboard.loadGpuInfo();
-    window.dashboard.addLog('info', 'Dashboard initialized');
+    window.dashboard.addLog('training', 'info', 'Dashboard initialized');
 });

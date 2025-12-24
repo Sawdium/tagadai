@@ -1,6 +1,6 @@
 # Training Dashboard
 
-Web-based interface to monitor ML training progress in real-time.
+Web-based interface to monitor ML training, fight data, and AI models in real-time.
 
 ## Usage
 
@@ -10,12 +10,37 @@ python -m src.dashboard --port 9000  # Custom port
 python -m src.dashboard --demo       # Demo mode with simulated data
 ```
 
+## Tabs
+
+The dashboard has 5 main tabs:
+
+| Tab | Purpose |
+|-----|---------|
+| **Training** | Control training, monitor progress, view loss/accuracy charts, GPU info, checkpoints |
+| **RL** | Run duels and scenarios, view telemetry from reinforcement learning runs |
+| **Scraper** | Control fight data scraper, view collection stats and database breakdown |
+| **Data** | Analytics: level distribution, date distribution, build balance, exploration stats |
+| **Models** | Leaderboard, H2H predictions, AI version management |
+
+A unified **Logs** drawer (toggle with `Ctrl+L`) shows logs from all systems with category filters.
+
 ## Features
 
 - Real-time fight generation progress
 - Training metrics visualization (loss, accuracy curves)
 - WebSocket updates for live monitoring
-- Integrates with `src.ml` trainer callbacks
+- Unified logging across training, scraper, and RL systems
+- Data analytics with level/date distribution charts
+- AI model leaderboard and head-to-head predictions
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Space` | Start/pause training |
+| `Escape` | Stop training |
+| `Ctrl+S` | Save training |
+| `Ctrl+L` | Toggle logs drawer |
 
 ## Architecture
 
