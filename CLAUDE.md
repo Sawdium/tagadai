@@ -22,11 +22,13 @@ tagadai/
 │   │   ├── status.py         # Account status display
 │   │   ├── fight.py          # Run fights (test or real)
 │   │   ├── aisync.py         # Upload/download AI code
-│   │   └── testrunner.py     # Run LeekScript tests
+│   │   ├── testrunner.py     # Run LeekScript tests
+│   │   └── rl.py             # RL experimentation CLI
 │   ├── dashboard/            # Training dashboard (see README.md)
 │   ├── scraper/              # Fight data scraper (see README.md)
 │   ├── ml/                   # ML training infrastructure (see README.md)
-│   └── localfight/           # Local fight runner (see README.md)
+│   ├── localfight/           # Local fight runner (see README.md)
+│   └── rl/                   # RL environment and telemetry (see docs/RL.md)
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # ACTIVE AI DEVELOPMENT - LeekScript v4 combat AI
 │   ├── AI/                   # Decision engine & scoring
@@ -126,9 +128,18 @@ python -m src.tools.testrunner --scenario 123    # Use specific scenario (defaul
 
 Runs LeekScript tests via test fights and parses debug output for assertions.
 
+### RL Tool
+```bash
+python -m src.tools.rl duel                    # Run single duel (random seed)
+python -m src.tools.rl duel --seed 42          # Reproducible duel
+python -m src.tools.rl scenario <yaml> -w 4    # Run YAML scenarios in parallel
+python -m src.tools.rl env --episodes 5        # Test RL environment
+```
+See [docs/RL.md](docs/RL.md) for full documentation.
+
 ## ML Infrastructure
 
-Four modules support ML-based AI training. Each has its own README with detailed usage:
+Five modules support ML-based AI training. Each has its own documentation:
 
 | Module | Purpose | Entry Point |
 |--------|---------|-------------|
@@ -136,6 +147,7 @@ Four modules support ML-based AI training. Each has its own README with detailed
 | `src/scraper/` | Fight data collection from API | Library (see README) |
 | `src/ml/` | Neural network training pipeline | Library (see README) |
 | `src/localfight/` | Offline fight execution via JAR | Library (see README) |
+| `src/rl/` | RL environment and telemetry | `python -m src.tools.rl` (see [docs/RL.md](docs/RL.md)) |
 
 ## Testing
 
