@@ -4,6 +4,7 @@ LeekWars fight scraper.
 Politely downloads fight data from the LeekWars API.
 """
 
+import os
 import time
 import threading
 import requests
@@ -13,6 +14,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional, Callable
 import logging
+
+from dotenv import load_dotenv
 
 from .db import FightDatabase
 
@@ -40,6 +43,8 @@ class ScraperStats:
     total_in_db: int = 0
     db_size_mb: float = 0.0
     current_action: str = "Idle"
+    current_strategy: str = "unknown"  # "low_level_winners" or "top_players"
+    level_301_ratio: float = 0.0
     last_fight_id: Optional[int] = None
     last_error: Optional[str] = None
     started_at: Optional[str] = None
@@ -76,9 +81,12 @@ class FightScraper:
     CONTEXT_TOURNAMENT = 3
 
     # Tournament exploration
-    TOURNAMENT_START_ID = 99200  # Known valid tournament ID (March 2025)
+    TOURNAMENT_START_ID = 108000  # Known valid tournament ID (December 2025)
     TOURNAMENT_SEARCH_STEP = 100  # Step for binary search
     LOW_LEVEL_THRESHOLD = 200  # Levels below this are "low level"
+
+    # Strategy thresholds
+    LOW_LEVEL_STRATEGY_THRESHOLD = 0.30  # Use low-level winner strategy when level 301 ratio >= this
 
     def __init__(
         self,
@@ -117,6 +125,50 @@ class FightScraper:
         # Session for connection pooling
         self._session = requests.Session()
         self._session.headers["User-Agent"] = "TagadAI/1.0 (ML Training Data Collection)"
+
+        # Authentication
+        self._token: Optional[str] = None
+        self._authenticated = False
+
+        # Auto-login if credentials available
+        self._try_auto_login()
+
+    def _try_auto_login(self):
+        """Try to authenticate using environment credentials."""
+        load_dotenv()
+        login = os.getenv("LEEKWARS_LOGIN")
+        password = os.getenv("LEEKWARS_PASSWORD")
+
+        if login and password:
+            try:
+                self.login(login, password)
+            except Exception as e:
+                logger.warning(f"Auto-login failed: {e}")
+
+    def login(self, login: str, password: str) -> dict:
+        """Authenticate with LeekWars API."""
+        response = self._session.post(
+            f"{self.API_BASE}/farmer/login-token",
+            data={"login": login, "password": password}
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if "error" in data:
+            raise ValueError(f"Login failed: {data.get('error')}")
+
+        self._token = data.get("token")
+        if self._token:
+            self._session.headers["Authorization"] = f"Bearer {self._token}"
+            self._authenticated = True
+            logger.info(f"Authenticated as {data.get('farmer', {}).get('login', 'unknown')}")
+
+        return data
+
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if scraper is authenticated."""
+        return self._authenticated
 
     def _rate_limit(self):
         """Wait for rate limit."""
@@ -166,12 +218,27 @@ class FightScraper:
                     self.stats.rate_limited_until = None
                     continue
                 elif response.status_code == 401:
-                    # Authentication required - log and return special marker
-                    # The scraper doesn't have auth, so skip this fight permanently
-                    print(f"HTTP 401 for {endpoint}")
+                    # 401 can mean auth required OR resource doesn't exist/restricted
+                    try:
+                        data = response.json()
+                        # API returns either {"error": "msg"} or just "msg" string
+                        if isinstance(data, str):
+                            # Plain string error like "fight_with_secret_trophy"
+                            self.stats.last_error = f"API: {data}"
+                            return None
+                        elif isinstance(data, dict) and "error" in data:
+                            # Dict with error key like {"error": "no_such_tournament"}
+                            self.stats.last_error = f"API: {data.get('error')}"
+                            return None
+                    except Exception:
+                        pass
+                    # No parseable error - actual auth issue
+                    if not self._authenticated:
+                        logger.warning(f"HTTP 401 for {endpoint} - not authenticated")
+                    else:
+                        logger.warning(f"HTTP 401 for {endpoint} - token may have expired")
                     self.stats.last_error = f"HTTP 401 - auth required"
-                    logger.warning(f"HTTP 401 for {endpoint} - auth required, skipping")
-                    return {"_auth_required": True}  # Special marker to skip permanently
+                    return {"_auth_required": True}  # Special marker to skip
                 elif response.status_code >= 500:
                     # Server error - retry
                     wait = self.delay * (2 ** attempt)
@@ -258,8 +325,11 @@ class FightScraper:
                 # Higher talent = higher priority
                 priority = talent // 100
                 source = f"{player_type}:{player_id}"
-                self.db.add_to_queue(fight_ids, source, priority)
-                logger.info(f"Added {len(fight_ids)} fights from {source} to queue")
+                added = self.db.add_to_queue(fight_ids, source, priority)
+                if added > 0:
+                    logger.info(f"Queued {added}/{len(fight_ids)} new fights from {source}")
+                else:
+                    logger.debug(f"No new fights from {source} ({len(fight_ids)} already downloaded)")
 
             self.db.mark_player_scraped(player_type, player_id, talent)
             self.stats.queue_size = self.db.queue_size()
@@ -295,9 +365,9 @@ class FightScraper:
 
         # Verify it's a complete fight
         if data.get("winner", -1) == -1:
-            logger.debug(f"Fight {fight_id} still pending, skipping")
-            self.stats.fights_skipped += 1
-            return None  # Might complete later, keep in queue
+            logger.debug(f"Fight {fight_id} still pending, moving to back of queue")
+            self.db.delay_in_queue(fight_id)  # Move to back so we try other fights
+            return False  # Treat as skipped for now, removed from front of queue
 
         # Skip test fights if configured
         context = data.get("context", -1)
@@ -400,10 +470,14 @@ class FightScraper:
         low = self.TOURNAMENT_START_ID
         high = low + 10000  # Search up to 10000 ahead
 
+        # Helper to check if response is valid
+        def is_valid(data):
+            return data and "error" not in data and not data.get("_auth_required")
+
         # First, find an upper bound that doesn't exist
         while True:
             data = self._request(f"tournament/get/{high}")
-            if data is None or "error" in data:
+            if not is_valid(data):
                 break
             high += 1000
             if high > 200000:  # Safety limit
@@ -414,7 +488,7 @@ class FightScraper:
         while low <= high:
             mid = (low + high) // 2
             data = self._request(f"tournament/get/{mid}")
-            if data and "error" not in data:
+            if is_valid(data):
                 latest = mid
                 low = mid + 1
             else:
@@ -438,7 +512,7 @@ class FightScraper:
         self.stats.current_action = f"Exploring tournament {tournament_id}..."
 
         data = self._request(f"tournament/get/{tournament_id}")
-        if data is None or "error" in data:
+        if data is None or "error" in data or data.get("_auth_required"):
             return 0
 
         tournament_type = data.get("type", "unknown")
@@ -529,10 +603,8 @@ class FightScraper:
         Explore tournaments going backward in time.
         Returns total leeks discovered.
         """
-        import sqlite3
-
         # Find the minimum tournament ID we've explored (to continue going backward)
-        with sqlite3.connect(self.db.db_path) as conn:
+        with self.db._connect() as conn:
             cursor = conn.execute("SELECT MIN(tournament_id) FROM tournament_exploration")
             row = cursor.fetchone()
             min_explored = row[0] if row and row[0] else None
@@ -559,21 +631,206 @@ class FightScraper:
 
         return total_leeks
 
+    def find_low_level_tournament_winners(self, count: int = 10) -> list[tuple[int, int, bool]]:
+        """
+        Find winners of low-level solo tournaments.
+
+        Explores solo tournaments and returns leek IDs of winners with levels below threshold.
+        Returns list of (leek_id, level, is_winner) tuples.
+        """
+        self.stats.current_action = "Finding low-level tournament winners..."
+
+        winners = []
+
+        # Find the minimum tournament ID we've explored
+        with self.db._connect() as conn:
+            cursor = conn.execute("SELECT MIN(tournament_id) FROM tournament_exploration")
+            row = cursor.fetchone()
+            min_explored = row[0] if row and row[0] else None
+
+        if min_explored is None:
+            start_id = self.find_latest_tournament_id()
+        else:
+            start_id = min_explored - 1
+
+        explored = 0
+        tournament_id = start_id
+
+        while len(winners) < count and tournament_id > 0 and not self._stop_event.is_set():
+            if self.db.is_tournament_explored(tournament_id):
+                tournament_id -= 1
+                continue
+
+            self.stats.current_action = f"Checking tournament {tournament_id} for low-level winners..."
+
+            data = self._request(f"tournament/get/{tournament_id}")
+            if data is None or "error" in data or data.get("_auth_required"):
+                tournament_id -= 1
+                continue
+
+            tournament_type = data.get("type", "unknown")
+            tournament_date = data.get("date", 0)
+
+            # Only process solo tournaments for individual leek levels
+            if tournament_type != "solo":
+                # Still mark as explored but don't extract low-level winners
+                self.db.mark_tournament_explored(
+                    tournament_id, tournament_type, tournament_date, 0, 0
+                )
+                tournament_id -= 1
+                explored += 1
+                continue
+
+            # Find the winner (they progress through rounds)
+            # In tournament data, we look for contestants who won their final match
+            all_leeks = {}
+            max_round = 0
+            final_round_name = None
+
+            for round_name, matches in data.get("rounds", {}).items():
+                # Parse round number (e.g., "round_3" -> 3, "finale" -> 999)
+                if round_name == "finale":
+                    round_num = 999
+                elif round_name.startswith("round_"):
+                    try:
+                        round_num = int(round_name.split("_")[1])
+                    except (ValueError, IndexError):
+                        round_num = 0
+                else:
+                    round_num = 0
+
+                if round_num > max_round:
+                    max_round = round_num
+                    final_round_name = round_name
+
+                for match in matches:
+                    for contestant in match.get("contestants", []):
+                        if contestant is None:
+                            continue
+                        leek_id = contestant.get("id")
+                        if not leek_id:
+                            continue
+
+                        # Extract level from name like "Chara (300)"
+                        name = contestant.get("name", "")
+                        level_match = re.search(r"\((\d+)\)", name)
+                        level = int(level_match.group(1)) if level_match else 301
+
+                        won = contestant.get("win", False)
+                        round_reached = round_num
+
+                        if leek_id not in all_leeks or round_reached > all_leeks[leek_id]["round"]:
+                            all_leeks[leek_id] = {
+                                "level": level,
+                                "won_last": won,
+                                "round": round_reached,
+                            }
+
+            # Find tournament winners (won their final match)
+            tournament_winners = [
+                (leek_id, info["level"])
+                for leek_id, info in all_leeks.items()
+                if info["won_last"] and info["round"] == max_round
+            ]
+
+            # Prioritize low-level winners
+            low_level_winners = [
+                (leek_id, level, True)
+                for leek_id, level in tournament_winners
+                if level < self.LOW_LEVEL_THRESHOLD
+            ]
+
+            low_level_count = sum(1 for _, info in all_leeks.items() if info["level"] < self.LOW_LEVEL_THRESHOLD)
+
+            if low_level_winners:
+                winners.extend(low_level_winners)
+                logger.info(f"Tournament {tournament_id}: found {len(low_level_winners)} low-level winners")
+
+            # Mark tournament as explored
+            self.db.mark_tournament_explored(
+                tournament_id, tournament_type, tournament_date,
+                len(all_leeks), low_level_count
+            )
+
+            tournament_id -= 1
+            explored += 1
+
+        return winners[:count]
+
+    def scrape_low_level_winners(self, count: int = 5) -> int:
+        """
+        Find and scrape fight histories of low-level tournament winners.
+
+        This is the primary strategy for collecting diverse training data.
+        Returns number of new leeks queued for scraping.
+        """
+        self.stats.current_action = "Scraping low-level tournament winners..."
+
+        winners = self.find_low_level_tournament_winners(count=count * 2)  # Find more than needed
+
+        queued = 0
+        for leek_id, level, is_winner in winners:
+            if queued >= count:
+                break
+
+            if self.db.is_player_scraped("leek", leek_id):
+                continue
+
+            self.stats.current_action = f"Scraping winner leek {leek_id} (lvl {level})..."
+
+            # Add to discovery queue with high priority (tournament winners are good data)
+            priority = 200 + (self.LOW_LEVEL_THRESHOLD - level)  # Lower level = higher priority
+            self.db.add_to_discovery_queue(
+                leek_id=leek_id,
+                farmer_id=0,
+                level=level,
+                priority_score=priority,
+                discovered_in_fight=0
+            )
+
+            # Immediately scrape their history
+            self.scrape_player_history("leek", leek_id, talent=priority)
+            queued += 1
+
+        return queued
+
     def _run_loop(self):
         """Main scraper loop."""
         self.stats.status = ScraperStatus.RUNNING
         self.stats.started_at = datetime.now().isoformat()
 
         try:
-            # Phase 1: Discover players
-            if not self._stop_event.is_set():
-                players = self.discover_top_players()
+            # Strategy selection based on level 301 ratio
+            # Default: Low-level winner strategy (prioritize diverse training data)
+            # Fallback: Top player strategy (when we need more high-level data)
 
-                # Phase 2: Get their histories
-                for player_type, player_id, talent in players:
-                    if self._stop_event.is_set():
-                        break
-                    self.scrape_player_history(player_type, player_id, talent)
+            level_301_ratio = self.db.get_level_301_ratio()
+            use_low_level_strategy = level_301_ratio >= self.LOW_LEVEL_STRATEGY_THRESHOLD
+            self.stats.level_301_ratio = level_301_ratio
+
+            if use_low_level_strategy:
+                logger.info(f"Using LOW-LEVEL WINNER strategy (level 301 ratio: {level_301_ratio:.1%})")
+                self.stats.current_strategy = "low_level_winners"
+                self.stats.current_action = "Strategy: Low-level tournament winners"
+
+                # Phase 1: Find and scrape low-level tournament winners
+                if not self._stop_event.is_set():
+                    queued = self.scrape_low_level_winners(count=10)
+                    logger.info(f"Queued {queued} low-level tournament winners")
+            else:
+                logger.info(f"Using TOP PLAYER strategy (level 301 ratio: {level_301_ratio:.1%} < {self.LOW_LEVEL_STRATEGY_THRESHOLD:.0%})")
+                self.stats.current_strategy = "top_players"
+                self.stats.current_action = "Strategy: Top players (need more level 301)"
+
+                # Phase 1: Discover top players (old strategy)
+                if not self._stop_event.is_set():
+                    players = self.discover_top_players()
+
+                    # Phase 2: Get their histories
+                    for player_type, player_id, talent in players:
+                        if self._stop_event.is_set():
+                            break
+                        self.scrape_player_history(player_type, player_id, talent)
 
             # Phase 3: Download fights from queue + snowball discovery
             while not self._stop_event.is_set():
@@ -591,14 +848,28 @@ class FightScraper:
                         self.db.remove_from_discovery_queue(leek_id)
                         continue
 
-                    # Both queues empty - explore more tournaments
-                    self.stats.current_action = "Exploring tournaments for more leeks..."
-                    leeks_found = self.explore_tournaments_backward(count=5)
+                    # Both queues empty - re-evaluate strategy and find more leeks
+                    level_301_ratio = self.db.get_level_301_ratio()
+                    self.stats.level_301_ratio = level_301_ratio
+                    use_low_level_strategy = level_301_ratio >= self.LOW_LEVEL_STRATEGY_THRESHOLD
+                    self.stats.current_strategy = "low_level_winners" if use_low_level_strategy else "top_players"
 
-                    if leeks_found == 0:
-                        # No new leeks found, update stats and wait briefly
-                        self.db.update_level_stats()
-                        time.sleep(5)
+                    if use_low_level_strategy:
+                        self.stats.current_action = "Finding more low-level tournament winners..."
+                        queued = self.scrape_low_level_winners(count=5)
+                        if queued > 0:
+                            logger.info(f"Queued {queued} more low-level winners")
+                            continue
+                    else:
+                        # Fallback to general tournament exploration
+                        self.stats.current_action = "Exploring tournaments for more leeks..."
+                        leeks_found = self.explore_tournaments_backward(count=5)
+                        if leeks_found > 0:
+                            continue
+
+                    # No new leeks found, update stats and wait briefly
+                    self.db.update_level_stats()
+                    time.sleep(5)
                     continue
 
                 # Try to download
@@ -618,6 +889,10 @@ class FightScraper:
 
                 if self.stats.fights_downloaded % 100 == 0:
                     self.db.update_level_stats()
+
+                # Periodic queue cleanup (every 500 downloads)
+                if self.stats.fights_downloaded % 500 == 0:
+                    self.db.cleanup_queue()
 
         except Exception as e:
             self.stats.status = ScraperStatus.ERROR
@@ -686,6 +961,9 @@ class FightScraper:
             "total_in_db": self.stats.total_in_db,
             "db_size_mb": self.stats.db_size_mb,
             "current_action": self.stats.current_action,
+            "current_strategy": self.stats.current_strategy,
+            "level_301_ratio": round(self.stats.level_301_ratio, 3),
+            "strategy_threshold": self.LOW_LEVEL_STRATEGY_THRESHOLD,
             "last_fight_id": self.stats.last_fight_id,
             "last_error": self.stats.last_error,
             "started_at": self.stats.started_at,

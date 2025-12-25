@@ -41,9 +41,17 @@ class FightDatabase:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        """Create a connection with proper settings for concurrent access."""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000;")  # 30 second timeout
+        return conn
+
     def _init_db(self):
         """Initialize database schema."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
+            # Enable WAL mode for better concurrent access
+            conn.execute("PRAGMA journal_mode=WAL;")
             conn.executescript("""
                 -- Main fights table (fight_date added via migration for existing DBs)
                 CREATE TABLE IF NOT EXISTS fights (
@@ -153,6 +161,83 @@ class FightDatabase:
 
                 CREATE INDEX IF NOT EXISTS idx_discovery_priority ON leek_discovery_queue(priority_score DESC);
 
+                -- Fight metadata for build analysis (equipment usage)
+                CREATE TABLE IF NOT EXISTS fight_leek_metadata (
+                    fight_id INTEGER NOT NULL,
+                    leek_id INTEGER NOT NULL,
+                    entity_id INTEGER,
+                    level INTEGER DEFAULT 0,  -- Individual leek level
+
+                    -- Leek stats (from fight start)
+                    strength INTEGER DEFAULT 0,
+                    agility INTEGER DEFAULT 0,
+                    magic INTEGER DEFAULT 0,
+                    resistance INTEGER DEFAULT 0,
+                    wisdom INTEGER DEFAULT 0,
+                    science INTEGER DEFAULT 0,
+                    frequency INTEGER DEFAULT 0,
+                    life INTEGER DEFAULT 0,
+                    tp INTEGER DEFAULT 0,
+                    mp INTEGER DEFAULT 0,
+
+                    -- Equipment used (JSON arrays)
+                    weapons_used TEXT,  -- JSON array of weapon IDs
+                    chips_used TEXT,    -- JSON array of chip IDs
+
+                    -- Usage counts
+                    weapon_actions INTEGER DEFAULT 0,
+                    chip_actions INTEGER DEFAULT 0,
+                    move_actions INTEGER DEFAULT 0,
+                    summon_actions INTEGER DEFAULT 0,
+
+                    -- Damage breakdown
+                    physical_damage INTEGER DEFAULT 0,
+                    magic_damage INTEGER DEFAULT 0,
+                    poison_damage INTEGER DEFAULT 0,
+                    heal_done INTEGER DEFAULT 0,
+
+                    -- Efficiency
+                    total_tp_spent INTEGER DEFAULT 0,
+                    total_mp_spent INTEGER DEFAULT 0,
+                    total_cells_moved INTEGER DEFAULT 0,
+                    turns_alive INTEGER DEFAULT 0,
+
+                    -- Metadata
+                    extracted_at TEXT NOT NULL,
+
+                    PRIMARY KEY (fight_id, leek_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_metadata_leek ON fight_leek_metadata(leek_id);
+
+                -- Aggregated equipment statistics (cached, refreshable)
+                CREATE TABLE IF NOT EXISTS equipment_stats (
+                    level_bucket TEXT NOT NULL,  -- '1-10', '11-20', ..., '301'
+                    fight_type INTEGER,          -- 0=solo, 1=farmer, 2=team, NULL=all
+                    item_type TEXT NOT NULL,     -- 'weapon' or 'chip'
+                    item_id INTEGER NOT NULL,
+                    item_name TEXT,
+
+                    -- Stats
+                    use_count INTEGER DEFAULT 0,      -- Times used across all fights
+                    leek_count INTEGER DEFAULT 0,     -- Unique leeks using this item
+                    total_damage INTEGER DEFAULT 0,   -- Estimated damage from this item
+
+                    -- Computed at refresh time
+                    computed_at TEXT NOT NULL,
+
+                    PRIMARY KEY (level_bucket, fight_type, item_type, item_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_equipment_bucket ON equipment_stats(level_bucket);
+                CREATE INDEX IF NOT EXISTS idx_equipment_item ON equipment_stats(item_type, item_id);
+
+                -- Metadata extraction progress tracking
+                CREATE TABLE IF NOT EXISTS metadata_extraction_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 -- Migration: Add fight_date column if it doesn't exist
                 -- SQLite doesn't have IF NOT EXISTS for ALTER TABLE, so we check first
             """)
@@ -165,6 +250,19 @@ class FightDatabase:
 
             # Create index on fight_date (after migration ensures column exists)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fights_date ON fights(fight_date)")
+
+            # Migration: Add level column to fight_leek_metadata if it doesn't exist
+            cursor = conn.execute("PRAGMA table_info(fight_leek_metadata)")
+            metadata_columns = [row[1] for row in cursor.fetchall()]
+            if 'level' not in metadata_columns:
+                conn.execute("ALTER TABLE fight_leek_metadata ADD COLUMN level INTEGER DEFAULT 0")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_metadata_level ON fight_leek_metadata(level)")
+
+            # Migration: Add stat columns to fight_leek_metadata
+            stat_columns = ['strength', 'agility', 'magic', 'resistance', 'wisdom', 'science', 'frequency', 'life', 'tp', 'mp']
+            for col in stat_columns:
+                if col not in metadata_columns:
+                    conn.execute(f"ALTER TABLE fight_leek_metadata ADD COLUMN {col} INTEGER DEFAULT 0")
 
             conn.executescript("""
                 -- Tournament exploration tracking
@@ -182,7 +280,7 @@ class FightDatabase:
 
     def has_fight(self, fight_id: int) -> bool:
         """Check if a fight is already in the database."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM fights WHERE fight_id = ?", (fight_id,)
             )
@@ -211,7 +309,7 @@ class FightDatabase:
             if isinstance(action, list) and len(action) >= 2 and action[0] == 6:
                 duration = max(duration, action[1])
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """INSERT INTO fights
                    (fight_id, json_data, winner, fight_type, context,
@@ -234,7 +332,7 @@ class FightDatabase:
 
     def get_fight(self, fight_id: int) -> Optional[FightRecord]:
         """Get a specific fight by ID."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT * FROM fights WHERE fight_id = ?", (fight_id,)
@@ -282,7 +380,7 @@ class FightDatabase:
             query += " LIMIT ?"
             params.append(limit)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(query, params)
             for row in cursor:
@@ -300,19 +398,51 @@ class FightDatabase:
                 )
 
     # Queue management
-    def add_to_queue(self, fight_ids: list[int], source: str, priority: int = 0):
-        """Add fight IDs to the download queue."""
-        with sqlite3.connect(self.db_path) as conn:
+    def add_to_queue(self, fight_ids: list[int], source: str, priority: int = 0) -> int:
+        """
+        Add fight IDs to the download queue, skipping already-downloaded fights.
+
+        Returns number of fights actually added.
+        """
+        if not fight_ids:
+            return 0
+
+        with self._connect() as conn:
+            # Batch-check which fights already exist in DB (fast with PRIMARY KEY index)
+            placeholders = ",".join("?" * len(fight_ids))
+            cursor = conn.execute(
+                f"SELECT fight_id FROM fights WHERE fight_id IN ({placeholders})",
+                fight_ids,
+            )
+            already_downloaded = set(row[0] for row in cursor)
+
+            # Also check which are already in queue
+            cursor = conn.execute(
+                f"SELECT fight_id FROM fight_queue WHERE fight_id IN ({placeholders})",
+                fight_ids,
+            )
+            already_queued = set(row[0] for row in cursor)
+
+            # Filter to only new fights
+            new_fights = [
+                fid for fid in fight_ids
+                if fid not in already_downloaded and fid not in already_queued
+            ]
+
+            if not new_fights:
+                return 0
+
             now = datetime.now().isoformat()
             conn.executemany(
-                """INSERT OR IGNORE INTO fight_queue (fight_id, source, priority, added_at)
+                """INSERT INTO fight_queue (fight_id, source, priority, added_at)
                    VALUES (?, ?, ?, ?)""",
-                [(fid, source, priority, now) for fid in fight_ids],
+                [(fid, source, priority, now) for fid in new_fights],
             )
+            return len(new_fights)
 
     def peek_from_queue(self) -> Optional[int]:
         """Get the next fight ID from queue without removing it."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 """SELECT fight_id FROM fight_queue
                    WHERE fight_id NOT IN (SELECT fight_id FROM fights)
@@ -324,8 +454,17 @@ class FightDatabase:
 
     def remove_from_queue(self, fight_id: int):
         """Remove a fight from the queue (call after successful download)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute("DELETE FROM fight_queue WHERE fight_id = ?", (fight_id,))
+
+    def delay_in_queue(self, fight_id: int):
+        """Move a fight to the back of the queue (for pending fights)."""
+        with self._connect() as conn:
+            # Update added_at to current time to move it to the back
+            conn.execute(
+                "UPDATE fight_queue SET added_at = datetime('now'), priority = -1 WHERE fight_id = ?",
+                (fight_id,)
+            )
 
     def pop_from_queue(self) -> Optional[int]:
         """Get and remove the next fight ID from the queue (legacy - prefer peek/remove)."""
@@ -336,17 +475,46 @@ class FightDatabase:
 
     def queue_size(self) -> int:
         """Get number of fights in queue (excluding already downloaded)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 """SELECT COUNT(*) FROM fight_queue
                    WHERE fight_id NOT IN (SELECT fight_id FROM fights)"""
             )
             return cursor.fetchone()[0]
 
+    def cleanup_queue(self) -> dict:
+        """
+        Remove stale entries from queues (already downloaded/scraped).
+
+        Returns dict with cleanup counts.
+        """
+        with self._connect() as conn:
+            # Clean fight queue: remove fights already downloaded
+            cursor = conn.execute("""
+                DELETE FROM fight_queue
+                WHERE fight_id IN (SELECT fight_id FROM fights)
+            """)
+            fights_removed = cursor.rowcount
+
+            # Clean discovery queue: remove leeks already scraped
+            cursor = conn.execute("""
+                DELETE FROM leek_discovery_queue
+                WHERE leek_id IN (
+                    SELECT player_id FROM scraped_players
+                    WHERE player_type = 'leek'
+                )
+            """)
+            discovery_removed = cursor.rowcount
+
+            return {
+                "fight_queue_cleaned": fights_removed,
+                "discovery_queue_cleaned": discovery_removed,
+            }
+
     # Player tracking
     def mark_player_scraped(self, player_type: str, player_id: int, talent: int = 0):
         """Mark a player as having had their history scraped."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO scraped_players
                    (player_type, player_id, talent, last_scraped)
@@ -356,7 +524,7 @@ class FightDatabase:
 
     def is_player_scraped(self, player_type: str, player_id: int) -> bool:
         """Check if we've already scraped a player's history."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 """SELECT 1 FROM scraped_players
                    WHERE player_type = ? AND player_id = ?""",
@@ -367,7 +535,7 @@ class FightDatabase:
     # State management
     def set_state(self, key: str, value: str):
         """Set a scraper state value."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO scraper_state (key, value) VALUES (?, ?)",
                 (key, value),
@@ -375,7 +543,7 @@ class FightDatabase:
 
     def get_state(self, key: str, default: str = "") -> str:
         """Get a scraper state value."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "SELECT value FROM scraper_state WHERE key = ?", (key,)
             )
@@ -385,7 +553,7 @@ class FightDatabase:
     # Statistics
     def get_stats(self) -> dict:
         """Get database statistics."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             stats = {}
 
             # Total fights
@@ -480,7 +648,7 @@ class FightDatabase:
         now = datetime.now().isoformat()
         new_leeks = []
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             for leek in inner_leeks:
                 # Skip summons (bulbs, etc)
                 if leek.get("summon", False):
@@ -558,7 +726,7 @@ class FightDatabase:
         discovered_in_fight: int
     ):
         """Add a leek to the discovery queue for future history scraping."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """INSERT OR IGNORE INTO leek_discovery_queue
                    (leek_id, farmer_id, level, priority_score, discovered_in_fight, added_at)
@@ -569,7 +737,7 @@ class FightDatabase:
 
     def peek_from_discovery_queue(self) -> Optional[tuple[int, int, int]]:
         """Peek next leek from discovery queue without removing. Returns (leek_id, farmer_id, level) or None."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 """SELECT leek_id, farmer_id, level FROM leek_discovery_queue
                    WHERE leek_id NOT IN (SELECT player_id FROM scraped_players WHERE player_type = 'leek')
@@ -581,7 +749,7 @@ class FightDatabase:
 
     def remove_from_discovery_queue(self, leek_id: int):
         """Remove a leek from the discovery queue (call after successful scrape)."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute("DELETE FROM leek_discovery_queue WHERE leek_id = ?", (leek_id,))
 
     def pop_from_discovery_queue(self) -> Optional[tuple[int, int, int]]:
@@ -593,7 +761,7 @@ class FightDatabase:
 
     def get_leek_stats(self, leek_id: int) -> Optional[dict]:
         """Get aggregated stats for a leek from observations."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 """SELECT
                        level,
@@ -622,7 +790,7 @@ class FightDatabase:
 
     def get_level_stats(self, level: int) -> Optional[dict]:
         """Get cached stats for a level."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "SELECT * FROM level_stats WHERE level = ?", (level,)
             )
@@ -638,7 +806,7 @@ class FightDatabase:
 
     def update_level_stats(self):
         """Recalculate level statistics from observations."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             # Calculate stats per level
             conn.execute("""
                 INSERT OR REPLACE INTO level_stats
@@ -728,7 +896,7 @@ class FightDatabase:
     # Analytics methods
     def get_level_distribution(self, fight_type: Optional[int] = None) -> list[dict]:
         """Get fight count per level, optionally filtered by fight type."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             if fight_type is not None:
                 cursor = conn.execute(
                     """SELECT level, COUNT(*) as count,
@@ -756,7 +924,7 @@ class FightDatabase:
 
     def get_stats_by_level(self, level: int, fight_type: Optional[int] = None) -> dict:
         """Get detailed stats distribution for a specific level."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             params = [level]
             type_filter = ""
             if fight_type is not None:
@@ -818,7 +986,7 @@ class FightDatabase:
 
     def get_popular_builds(self, level: int, fight_type: Optional[int] = None, limit: int = 5) -> list[dict]:
         """Get the most common stat distributions (builds) for a level."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             params = [level]
             type_filter = ""
             if fight_type is not None:
@@ -866,7 +1034,7 @@ class FightDatabase:
 
     def get_fight_type_distribution(self) -> dict:
         """Get fight counts by type."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT fight_type, COUNT(DISTINCT fight_id) as fights,
                        COUNT(*) as observations
@@ -880,7 +1048,7 @@ class FightDatabase:
 
     def get_context_distribution(self) -> dict:
         """Get fight counts by context."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT fight_context, COUNT(DISTINCT fight_id) as fights,
                        COUNT(*) as observations
@@ -895,7 +1063,7 @@ class FightDatabase:
     # Tournament exploration tracking
     def is_tournament_explored(self, tournament_id: int) -> bool:
         """Check if a tournament has been explored."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM tournament_exploration WHERE tournament_id = ?",
                 (tournament_id,)
@@ -911,7 +1079,7 @@ class FightDatabase:
         low_level_leeks: int
     ):
         """Mark a tournament as explored."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO tournament_exploration
                    (tournament_id, tournament_type, tournament_date, leeks_found,
@@ -923,7 +1091,7 @@ class FightDatabase:
 
     def get_tournament_exploration_stats(self) -> dict:
         """Get tournament exploration statistics."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT
                     COUNT(*) as total_explored,
@@ -944,7 +1112,7 @@ class FightDatabase:
 
     def get_last_explored_tournament_id(self) -> Optional[int]:
         """Get the most recently explored tournament ID."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "SELECT MAX(tournament_id) FROM tournament_exploration"
             )
@@ -953,7 +1121,7 @@ class FightDatabase:
 
     def get_level_301_ratio(self) -> float:
         """Get the ratio of level 301 observations to total observations."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT
                     COUNT(*) as total,
@@ -967,7 +1135,7 @@ class FightDatabase:
 
     def get_level_bracket_counts(self) -> dict:
         """Get observation counts by level brackets."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT
                     CASE
@@ -999,7 +1167,7 @@ class FightDatabase:
 
         Returns list of {"date": "YYYY-MM", "count": N, "levels_avg": X}
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             if bucket == "day":
                 date_format = "%Y-%m-%d"
             elif bucket == "week":
@@ -1048,7 +1216,7 @@ class FightDatabase:
 
     def get_fight_date_range(self) -> dict:
         """Get the date range of stored fights."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT
                     MIN(fight_date) as oldest,
@@ -1071,7 +1239,7 @@ class FightDatabase:
         Data before this date may not reflect current game balance due to
         item restriction changes.
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute("""
                 SELECT
                     COUNT(*) FILTER (WHERE fight_date IS NULL) as no_date,
@@ -1095,4 +1263,343 @@ class FightDatabase:
                 "total": total,
                 "recent_ratio": round(recent_count / total, 3) if total > 0 else 0,
                 "old_ratio": round(old_count / total, 3) if total > 0 else 0,
+            }
+
+    # ==================== Metadata Extraction ====================
+
+    def save_fight_metadata(self, metadata_list: list[dict]) -> int:
+        """
+        Save extracted fight metadata to database.
+
+        Args:
+            metadata_list: List of metadata dicts from extract_fight_metadata
+
+        Returns:
+            Number of records saved
+        """
+        if not metadata_list:
+            return 0
+
+        now = datetime.now().isoformat()
+        saved = 0
+
+        with self._connect() as conn:
+            for meta in metadata_list:
+                conn.execute(
+                    """INSERT OR REPLACE INTO fight_leek_metadata
+                       (fight_id, leek_id, entity_id, level,
+                        strength, agility, magic, resistance, wisdom, science, frequency, life, tp, mp,
+                        weapons_used, chips_used,
+                        weapon_actions, chip_actions, move_actions, summon_actions,
+                        physical_damage, magic_damage, poison_damage, heal_done,
+                        total_tp_spent, total_mp_spent, total_cells_moved, turns_alive,
+                        extracted_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        meta.get("fight_id"),
+                        meta.get("leek_id"),
+                        meta.get("entity_id"),
+                        meta.get("level", 0),
+                        # Stats
+                        meta.get("strength", 0),
+                        meta.get("agility", 0),
+                        meta.get("magic", 0),
+                        meta.get("resistance", 0),
+                        meta.get("wisdom", 0),
+                        meta.get("science", 0),
+                        meta.get("frequency", 0),
+                        meta.get("life", 0),
+                        meta.get("tp", 0),
+                        meta.get("mp", 0),
+                        # Equipment
+                        json.dumps(meta.get("weapons_used", [])),
+                        json.dumps(meta.get("chips_used", [])),
+                        meta.get("weapon_actions", 0),
+                        meta.get("chip_actions", 0),
+                        meta.get("move_actions", 0),
+                        meta.get("summon_actions", 0),
+                        meta.get("physical_damage", 0),
+                        meta.get("magic_damage", 0),
+                        meta.get("poison_damage", 0),
+                        meta.get("heal_done", 0),
+                        meta.get("total_tp_spent", 0),
+                        meta.get("total_mp_spent", 0),
+                        meta.get("total_cells_moved", 0),
+                        meta.get("turns_alive", 0),
+                        now,
+                    ),
+                )
+                saved += 1
+
+        return saved
+
+    def get_metadata_extraction_progress(self) -> dict:
+        """Get metadata extraction progress."""
+        with self._connect() as conn:
+            # Total fights
+            cursor = conn.execute("SELECT COUNT(*) FROM fights")
+            total_fights = cursor.fetchone()[0]
+
+            # Fights with metadata extracted (unique fight_ids)
+            cursor = conn.execute(
+                "SELECT COUNT(DISTINCT fight_id) FROM fight_leek_metadata"
+            )
+            extracted_fights = cursor.fetchone()[0]
+
+            # Last processed fight_id
+            cursor = conn.execute(
+                "SELECT value FROM metadata_extraction_state WHERE key = 'last_fight_id'"
+            )
+            row = cursor.fetchone()
+            last_fight_id = int(row[0]) if row else 0
+
+            # Last extraction time
+            cursor = conn.execute(
+                "SELECT value FROM metadata_extraction_state WHERE key = 'last_extraction_time'"
+            )
+            row = cursor.fetchone()
+            last_extraction_time = row[0] if row else None
+
+            return {
+                "total_fights": total_fights,
+                "extracted_fights": extracted_fights,
+                "remaining_fights": total_fights - extracted_fights,
+                "progress_percent": round(
+                    extracted_fights / total_fights * 100, 2
+                ) if total_fights > 0 else 0,
+                "last_fight_id": last_fight_id,
+                "last_extraction_time": last_extraction_time,
+            }
+
+    def set_metadata_extraction_state(self, key: str, value: str):
+        """Set metadata extraction state value."""
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata_extraction_state (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+
+    def get_fights_needing_metadata(self, batch_size: int = 100) -> list[tuple[int, dict]]:
+        """
+        Get fights that don't have metadata extracted yet.
+
+        Returns list of (fight_id, fight_data) tuples.
+        """
+        with self._connect() as conn:
+            # Find fights without metadata
+            cursor = conn.execute(
+                """SELECT f.fight_id, f.json_data
+                   FROM fights f
+                   LEFT JOIN fight_leek_metadata m ON f.fight_id = m.fight_id
+                   WHERE m.fight_id IS NULL
+                   ORDER BY f.fight_id
+                   LIMIT ?""",
+                (batch_size,)
+            )
+
+            return [(row[0], json.loads(row[1])) for row in cursor.fetchall()]
+
+    def get_equipment_usage_by_level(
+        self,
+        fight_type: Optional[int] = None,
+        min_sample_size: int = 10,
+    ) -> dict[str, dict]:
+        """
+        Get equipment usage statistics by level bucket.
+
+        Returns:
+            {bucket: {"weapons": {id: {"name": str, "count": int, "pct": float}}, ...}}
+        """
+        with self._connect() as conn:
+            # Join metadata with observations to get level
+            type_filter = ""
+            params: list = []
+            if fight_type is not None:
+                type_filter = "AND o.fight_type = ?"
+                params.append(fight_type)
+
+            cursor = conn.execute(f"""
+                SELECT
+                    CASE
+                        WHEN o.level = 301 THEN '301'
+                        ELSE CAST(((o.level - 1) / 10) * 10 + 1 AS TEXT) || '-' ||
+                             CAST(((o.level - 1) / 10) * 10 + 10 AS TEXT)
+                    END as bucket,
+                    m.weapons_used,
+                    m.chips_used,
+                    COUNT(*) as sample_count
+                FROM fight_leek_metadata m
+                JOIN leek_observations o ON m.fight_id = o.fight_id AND m.leek_id = o.leek_id
+                WHERE o.level > 0 {type_filter}
+                GROUP BY bucket, m.weapons_used, m.chips_used
+            """, params)
+
+            from collections import defaultdict
+
+            buckets: dict[str, dict] = defaultdict(lambda: {
+                "weapons": defaultdict(int),
+                "chips": defaultdict(int),
+                "sample_size": 0,
+            })
+
+            for row in cursor:
+                bucket = row[0]
+                weapons = json.loads(row[1] or "[]")
+                chips = json.loads(row[2] or "[]")
+                count = row[3]
+
+                buckets[bucket]["sample_size"] += count
+                for w in weapons:
+                    buckets[bucket]["weapons"][w] += count
+                for c in chips:
+                    buckets[bucket]["chips"][c] += count
+
+            # Filter by min sample size and convert to percentages
+            result = {}
+            for bucket, data in buckets.items():
+                if data["sample_size"] < min_sample_size:
+                    continue
+
+                sample = data["sample_size"]
+                result[bucket] = {
+                    "sample_size": sample,
+                    "weapons": {
+                        w: {"count": c, "pct": round(c / sample * 100, 1)}
+                        for w, c in sorted(
+                            data["weapons"].items(),
+                            key=lambda x: x[1],
+                            reverse=True
+                        )[:20]  # Top 20
+                    },
+                    "chips": {
+                        c: {"count": cnt, "pct": round(cnt / sample * 100, 1)}
+                        for c, cnt in sorted(
+                            data["chips"].items(),
+                            key=lambda x: x[1],
+                            reverse=True
+                        )[:30]  # Top 30
+                    },
+                }
+
+            return result
+
+    def get_metadata_stats(self) -> dict:
+        """Get metadata table statistics."""
+        with self._connect() as conn:
+            cursor = conn.execute("""
+                SELECT
+                    COUNT(*) as total_records,
+                    COUNT(DISTINCT fight_id) as unique_fights,
+                    COUNT(DISTINCT leek_id) as unique_leeks,
+                    SUM(weapon_actions) as total_weapon_actions,
+                    SUM(chip_actions) as total_chip_actions,
+                    AVG(turns_alive) as avg_turns_alive
+                FROM fight_leek_metadata
+            """)
+            row = cursor.fetchone()
+            return {
+                "total_records": row[0] or 0,
+                "unique_fights": row[1] or 0,
+                "unique_leeks": row[2] or 0,
+                "total_weapon_actions": row[3] or 0,
+                "total_chip_actions": row[4] or 0,
+                "avg_turns_alive": round(row[5] or 0, 2),
+            }
+
+    def get_equipment_cooccurrence(
+        self,
+        level_bucket: Optional[str] = None,
+        fight_type: Optional[int] = None,
+        min_cooccurrence: int = 10,
+    ) -> dict:
+        """
+        Compute equipment co-occurrence matrix.
+
+        Returns which weapons/chips are used together by the same leek.
+
+        Args:
+            level_bucket: Filter by level bucket (e.g., "91-100", "301")
+            fight_type: Filter by fight type (0=solo, 1=farmer, 2=team)
+            min_cooccurrence: Minimum co-occurrence count to include
+
+        Returns:
+            {"items": [...], "matrix": [[...]], "counts": {...}}
+        """
+        from collections import defaultdict
+
+        with self._connect() as conn:
+            # Build query with filters using individual leek level from metadata
+            query = """
+                SELECT m.weapons_used, m.chips_used
+                FROM fight_leek_metadata m
+            """
+            params: list = []
+            conditions = []
+
+            # Filter by individual leek level (from metadata)
+            if level_bucket:
+                if level_bucket == "301":
+                    conditions.append("m.level = 301")
+                else:
+                    parts = level_bucket.split("-")
+                    if len(parts) == 2:
+                        conditions.append("m.level >= ? AND m.level <= ?")
+                        params.extend([int(parts[0]), int(parts[1])])
+
+            # Filter by fight type (need to join fights table)
+            if fight_type is not None:
+                query += " JOIN fights f ON m.fight_id = f.fight_id"
+                conditions.append("f.fight_type = ?")
+                params.append(fight_type)
+
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+
+            cursor = conn.execute(query, params)
+
+            # Count co-occurrences
+            cooccurrence: dict[tuple, int] = defaultdict(int)
+            item_counts: dict[str, int] = defaultdict(int)
+
+            for row in cursor:
+                weapons = json.loads(row[0] or "[]")
+                chips = json.loads(row[1] or "[]")
+
+                # Create item keys with prefixes
+                items = [f"W:{w}" for w in set(weapons)] + [f"C:{c}" for c in set(chips)]
+
+                # Count individual items
+                for item in items:
+                    item_counts[item] += 1
+
+                # Count pairs
+                for i, item_a in enumerate(items):
+                    for item_b in items[i + 1:]:
+                        pair = tuple(sorted([item_a, item_b]))
+                        cooccurrence[pair] += 1
+
+            # Filter by minimum co-occurrence and build matrix
+            # Get top items by count
+            top_items = sorted(item_counts.items(), key=lambda x: x[1], reverse=True)[:30]
+            item_list = [item for item, _ in top_items]
+
+            # Build matrix
+            matrix = []
+            for item_a in item_list:
+                row = []
+                for item_b in item_list:
+                    if item_a == item_b:
+                        row.append(item_counts.get(item_a, 0))
+                    else:
+                        pair = tuple(sorted([item_a, item_b]))
+                        count = cooccurrence.get(pair, 0)
+                        row.append(count if count >= min_cooccurrence else 0)
+                matrix.append(row)
+
+            return {
+                "items": item_list,
+                "matrix": matrix,
+                "counts": dict(item_counts),
+                "level_bucket": level_bucket,
+                "fight_type": fight_type,
             }

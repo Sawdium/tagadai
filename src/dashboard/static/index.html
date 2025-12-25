@@ -21,12 +21,13 @@
             </div>
         </header>
 
-        <!-- Tab Navigation (5 tabs) -->
+        <!-- Tab Navigation (6 tabs) -->
         <nav class="tabs">
             <button class="tab-btn active" data-tab="training">Training</button>
             <button class="tab-btn" data-tab="rl">RL</button>
             <button class="tab-btn" data-tab="scraper">Scraper</button>
             <button class="tab-btn" data-tab="data">Data</button>
+            <button class="tab-btn" data-tab="builds">Builds</button>
             <button class="tab-btn" data-tab="models">Models</button>
         </nav>
 
@@ -394,6 +395,174 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- ========== BUILDS TAB (equipment analysis) ========== -->
+            <section id="builds-tab" class="tab-content">
+                <!-- Data Freshness Banner -->
+                <div class="data-freshness-banner" id="data-freshness">
+                    <span class="freshness-icon">📅</span>
+                    <span class="freshness-text" id="freshness-text">Loading data info...</span>
+                </div>
+
+                <!-- Metadata Extraction Control -->
+                <div class="card compact">
+                    <div class="card-header-inline">
+                        <h2>Metadata Extraction</h2>
+                        <div class="extraction-controls">
+                            <button class="btn primary" id="btn-extract-metadata">Extract Metadata</button>
+                            <span class="extraction-status" id="extraction-status">Ready</span>
+                        </div>
+                    </div>
+                    <div class="extraction-progress-row">
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="metadata-progress-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="progress-text" id="metadata-progress-text">0%</span>
+                    </div>
+                    <div class="extraction-stats-row">
+                        <div class="stat-mini"><span class="label">Total Fights</span><span class="value" id="meta-total-fights">0</span></div>
+                        <div class="stat-mini"><span class="label">Extracted</span><span class="value" id="meta-extracted">0</span></div>
+                        <div class="stat-mini"><span class="label">Remaining</span><span class="value" id="meta-remaining">0</span></div>
+                        <div class="stat-mini"><span class="label">Last Run</span><span class="value" id="meta-last-run">--</span></div>
+                    </div>
+                </div>
+
+                <!-- Equipment Usage by Level -->
+                <div class="card compact">
+                    <div class="card-header-inline">
+                        <h2>Equipment by Level</h2>
+                        <div class="chart-controls-inline">
+                            <select id="equipment-fight-type">
+                                <option value="">All Types</option>
+                                <option value="0">Solo</option>
+                                <option value="1">Farmer</option>
+                                <option value="2">Team</option>
+                            </select>
+                            <button class="btn small" id="btn-refresh-equipment">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="equipment-chart-container" style="height: 300px;">
+                        <canvas id="equipment-chart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Equipment Details Table -->
+                <div class="builds-grid">
+                    <div class="card compact">
+                        <h2>Top Weapons by Level</h2>
+                        <div class="equipment-table-container" id="weapons-table">
+                            <p class="empty-state">Click "Refresh" to load data</p>
+                        </div>
+                    </div>
+                    <div class="card compact">
+                        <h2>Top Chips by Level</h2>
+                        <div class="equipment-table-container" id="chips-table">
+                            <p class="empty-state">Click "Refresh" to load data</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Build Evolution (Stacked Area Chart) -->
+                <div class="card compact">
+                    <div class="card-header-inline">
+                        <h2>Build Evolution by Level</h2>
+                        <div class="chart-controls-inline">
+                            <select id="evolution-clusters">
+                                <option value="4">4 Clusters</option>
+                                <option value="6" selected>6 Clusters</option>
+                                <option value="8">8 Clusters</option>
+                            </select>
+                            <button class="btn small" id="btn-load-evolution">Load</button>
+                        </div>
+                    </div>
+                    <div class="evolution-chart-container" style="height: 280px;">
+                        <canvas id="evolution-chart"></canvas>
+                    </div>
+                    <div class="evolution-legend" id="evolution-legend"></div>
+                </div>
+
+                <!-- Build Archetypes (Clustering) -->
+                <div class="card compact">
+                    <div class="card-header-inline">
+                        <h2>Build Archetypes</h2>
+                        <div class="chart-controls-inline">
+                            <select id="cluster-level-min">
+                                <option value="1">Min: 1</option>
+                                <option value="50">Min: 50</option>
+                                <option value="100">Min: 100</option>
+                                <option value="200">Min: 200</option>
+                                <option value="301">Min: 301</option>
+                            </select>
+                            <select id="cluster-level-max">
+                                <option value="301" selected>Max: 301</option>
+                                <option value="100">Max: 100</option>
+                                <option value="200">Max: 200</option>
+                                <option value="50">Max: 50</option>
+                            </select>
+                            <select id="cluster-count">
+                                <option value="4">4 Clusters</option>
+                                <option value="6" selected>6 Clusters</option>
+                                <option value="8">8 Clusters</option>
+                            </select>
+                            <button class="btn small" id="btn-refresh-clusters">Analyze</button>
+                        </div>
+                    </div>
+                    <div class="cluster-stats-row" id="cluster-stats">
+                        <div class="stat-mini"><span class="label">Samples</span><span class="value" id="cluster-sample-count">--</span></div>
+                        <div class="stat-mini"><span class="label">Archetypes</span><span class="value" id="cluster-archetype-count">--</span></div>
+                    </div>
+                    <div class="clusters-grid" id="clusters-container">
+                        <p class="empty-state">Click "Analyze" to discover build archetypes</p>
+                    </div>
+                </div>
+
+                <!-- Auto-Generated Insights -->
+                <div class="card compact insights-card">
+                    <div class="card-header-inline">
+                        <h2>Meta Insights</h2>
+                        <button class="btn small" id="btn-load-insights">Generate</button>
+                    </div>
+                    <div class="insights-list" id="insights-container">
+                        <p class="empty-state">Click "Generate" to analyze build trends</p>
+                    </div>
+                </div>
+
+                <!-- Equipment Co-occurrence Analysis -->
+                <div class="card compact">
+                    <div class="card-header-inline">
+                        <h2>Equipment Co-occurrence</h2>
+                        <div class="chart-controls-inline">
+                            <select id="cooccurrence-level">
+                                <option value="">All Levels</option>
+                                <option value="1-10">1-10</option>
+                                <option value="11-20">11-20</option>
+                                <option value="21-30">21-30</option>
+                                <option value="31-40">31-40</option>
+                                <option value="41-50">41-50</option>
+                                <option value="51-60">51-60</option>
+                                <option value="61-70">61-70</option>
+                                <option value="71-80">71-80</option>
+                                <option value="81-90">81-90</option>
+                                <option value="91-100">91-100</option>
+                                <option value="301">301</option>
+                            </select>
+                            <select id="cooccurrence-type">
+                                <option value="">All Items</option>
+                                <option value="weapon">Weapons Only</option>
+                                <option value="chip">Chips Only</option>
+                            </select>
+                            <button class="btn small" id="btn-refresh-cooccurrence">Load</button>
+                        </div>
+                    </div>
+                    <div class="cooccurrence-container">
+                        <div class="cooccurrence-heatmap" id="cooccurrence-heatmap">
+                            <p class="empty-state">Click "Load" to analyze equipment combinations</p>
+                        </div>
+                        <div class="cooccurrence-legend" id="cooccurrence-legend"></div>
+                    </div>
+                    <div class="cooccurrence-stats" id="cooccurrence-stats"></div>
                 </div>
             </section>
 

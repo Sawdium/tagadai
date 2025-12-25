@@ -49,6 +49,7 @@ class Dashboard {
         this.rlPollInterval = null;
         this.rlState = 'idle';
         this.dataInitialized = false;
+        this.equipmentChart = null;
 
         this.initCharts();
         this.initControls();
@@ -932,6 +933,9 @@ class Dashboard {
                 this.rlInitialized = true;
             }
             this.loadRLResults();
+        } else if (tabId === 'builds') {
+            this.loadMetadataStatus();
+            this.loadEquipmentData();
         }
 
         // Stop scraper polling when leaving scraper tab
@@ -2292,11 +2296,862 @@ class Dashboard {
             }
         });
     }
+
+    // ========== BUILDS TAB METHODS ==========
+
+    async loadMetadataStatus() {
+        try {
+            const response = await fetch('/api/metadata/status');
+            const data = await response.json();
+
+            if (data.error) {
+                console.error('Metadata status error:', data.error);
+                this.addLog('builds', 'error', `Failed to load metadata status: ${data.error}`);
+                return;
+            }
+
+            const progress = data.progress;
+            const pct = progress.progress_percent;
+
+            document.getElementById('meta-total-fights').textContent = progress.total_fights.toLocaleString();
+            document.getElementById('meta-extracted').textContent = progress.extracted_fights.toLocaleString();
+            document.getElementById('meta-remaining').textContent = progress.remaining_fights.toLocaleString();
+            document.getElementById('metadata-progress-bar').style.width = `${pct}%`;
+            document.getElementById('metadata-progress-text').textContent = `${pct.toFixed(1)}%`;
+
+            if (progress.last_extraction_time) {
+                const date = new Date(progress.last_extraction_time);
+                document.getElementById('meta-last-run').textContent = date.toLocaleString();
+            }
+
+        } catch (error) {
+            console.error('Failed to load metadata status:', error);
+            this.addLog('builds', 'error', `Failed to load metadata status: ${error.message}`);
+        }
+    }
+
+    async extractMetadata() {
+        const btn = document.getElementById('btn-extract-metadata');
+        const status = document.getElementById('extraction-status');
+
+        btn.disabled = true;
+        status.textContent = 'Extracting...';
+        status.className = 'extraction-status running';
+
+        try {
+            const response = await fetch('/api/metadata/extract?batch_size=500&max_batches=20', {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            if (data.error) {
+                status.textContent = `Error: ${data.error}`;
+                status.className = 'extraction-status error';
+            } else {
+                status.textContent = `Saved ${data.records_saved.toLocaleString()} records`;
+                status.className = 'extraction-status success';
+                await this.loadMetadataStatus();
+            }
+        } catch (error) {
+            status.textContent = `Error: ${error.message}`;
+            status.className = 'extraction-status error';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    async loadEquipmentData() {
+        const fightType = document.getElementById('equipment-fight-type')?.value || '';
+        const url = fightType
+            ? `/api/metadata/equipment?fight_type=${fightType}`
+            : '/api/metadata/equipment';
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.error) {
+                console.error('Equipment data error:', data.error);
+                this.addLog('builds', 'error', `Failed to load equipment data: ${data.error}`);
+                return;
+            }
+
+            if (!data.by_level || Object.keys(data.by_level).length === 0) {
+                console.warn('No equipment data available');
+                this.addLog('builds', 'warning', 'No equipment data available. Click "Extract Metadata" first.');
+                return;
+            }
+
+            this.renderEquipmentChart(data.by_level);
+            this.renderEquipmentTables(data.by_level);
+            this.addLog('builds', 'info', `Loaded equipment data for ${Object.keys(data.by_level).length} level brackets`);
+
+        } catch (error) {
+            console.error('Failed to load equipment data:', error);
+            this.addLog('builds', 'error', `Failed to load equipment data: ${error.message}`);
+        }
+    }
+
+    renderEquipmentChart(byLevel) {
+        const canvas = document.getElementById('equipment-chart');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+
+        if (this.equipmentChart) {
+            this.equipmentChart.destroy();
+        }
+
+        // Sort buckets by level
+        const buckets = Object.keys(byLevel).sort((a, b) => {
+            const aNum = parseInt(a.split('-')[0]) || 301;
+            const bNum = parseInt(b.split('-')[0]) || 301;
+            return aNum - bNum;
+        });
+
+        if (buckets.length === 0) {
+            return;
+        }
+
+        // Get top weapons across all levels
+        const weaponCounts = {};
+        for (const bucket of buckets) {
+            const data = byLevel[bucket];
+            for (const [id, info] of Object.entries(data.weapons || {})) {
+                if (!weaponCounts[info.name]) {
+                    weaponCounts[info.name] = { total: 0, id };
+                }
+                weaponCounts[info.name].total += info.count;
+            }
+        }
+
+        const topWeapons = Object.entries(weaponCounts)
+            .sort((a, b) => b[1].total - a[1].total)
+            .slice(0, 8)
+            .map(([name]) => name);
+
+        // Build datasets for top weapons
+        const colors = [
+            'rgba(88, 166, 255, 0.8)',
+            'rgba(163, 113, 247, 0.8)',
+            'rgba(87, 171, 90, 0.8)',
+            'rgba(255, 166, 87, 0.8)',
+            'rgba(255, 99, 132, 0.8)',
+            'rgba(75, 192, 192, 0.8)',
+            'rgba(255, 205, 86, 0.8)',
+            'rgba(201, 203, 207, 0.8)',
+        ];
+
+        const datasets = topWeapons.map((weapon, i) => {
+            const data = buckets.map(bucket => {
+                const weapons = byLevel[bucket].weapons || {};
+                for (const [id, info] of Object.entries(weapons)) {
+                    if (info.name === weapon) return info.pct;
+                }
+                return 0;
+            });
+
+            return {
+                label: weapon,
+                data: data,
+                backgroundColor: colors[i % colors.length],
+                borderColor: colors[i % colors.length].replace('0.8', '1'),
+                borderWidth: 1,
+            };
+        });
+
+        this.equipmentChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: buckets,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: { color: '#e6edf3', boxWidth: 12, padding: 8 }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Weapon Usage by Level (%)',
+                        color: '#e6edf3'
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: false,
+                        ticks: { color: '#8b949e' },
+                        grid: { color: 'rgba(48, 54, 61, 0.5)' }
+                    },
+                    y: {
+                        stacked: false,
+                        ticks: { color: '#8b949e' },
+                        grid: { color: 'rgba(48, 54, 61, 0.5)' },
+                        title: {
+                            display: true,
+                            text: '% of leeks using',
+                            color: '#8b949e'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    renderEquipmentTables(byLevel) {
+        const weaponsContainer = document.getElementById('weapons-table');
+        const chipsContainer = document.getElementById('chips-table');
+
+        if (!weaponsContainer || !chipsContainer) return;
+
+        // Sort buckets
+        const buckets = Object.keys(byLevel).sort((a, b) => {
+            const aNum = parseInt(a.split('-')[0]) || 301;
+            const bNum = parseInt(b.split('-')[0]) || 301;
+            return aNum - bNum;
+        });
+
+        // Build weapons table
+        let weaponsHtml = '<table class="equipment-table"><thead><tr><th>Level</th><th>Sample</th><th>Top Weapons</th></tr></thead><tbody>';
+        for (const bucket of buckets) {
+            const data = byLevel[bucket];
+            const topWeapons = Object.entries(data.weapons || {})
+                .sort((a, b) => b[1].pct - a[1].pct)
+                .slice(0, 3)
+                .map(([id, info]) => `${info.name} (${info.pct}%)`)
+                .join(', ');
+            weaponsHtml += `<tr><td>${bucket}</td><td>${data.sample_size.toLocaleString()}</td><td>${topWeapons || '-'}</td></tr>`;
+        }
+        weaponsHtml += '</tbody></table>';
+        weaponsContainer.innerHTML = weaponsHtml;
+
+        // Build chips table
+        let chipsHtml = '<table class="equipment-table"><thead><tr><th>Level</th><th>Top Chips</th></tr></thead><tbody>';
+        for (const bucket of buckets) {
+            const data = byLevel[bucket];
+            const topChips = Object.entries(data.chips || {})
+                .sort((a, b) => b[1].pct - a[1].pct)
+                .slice(0, 4)
+                .map(([id, info]) => `${info.name} (${info.pct}%)`)
+                .join(', ');
+            chipsHtml += `<tr><td>${bucket}</td><td>${topChips || '-'}</td></tr>`;
+        }
+        chipsHtml += '</tbody></table>';
+        chipsContainer.innerHTML = chipsHtml;
+    }
+
+    setupBuildsTab() {
+        // Extract button
+        document.getElementById('btn-extract-metadata')?.addEventListener('click', () => {
+            this.extractMetadata();
+        });
+
+        // Refresh button
+        document.getElementById('btn-refresh-equipment')?.addEventListener('click', () => {
+            this.loadEquipmentData();
+        });
+
+        // Fight type filter
+        document.getElementById('equipment-fight-type')?.addEventListener('change', () => {
+            this.loadEquipmentData();
+        });
+
+        // Co-occurrence controls
+        document.getElementById('btn-refresh-cooccurrence')?.addEventListener('click', () => {
+            this.loadCooccurrenceData();
+        });
+
+        // Cluster controls
+        document.getElementById('btn-refresh-clusters')?.addEventListener('click', () => {
+            this.loadClusterData();
+        });
+
+        // Evolution controls
+        document.getElementById('btn-load-evolution')?.addEventListener('click', () => {
+            this.loadEvolutionData();
+        });
+
+        // Insights controls
+        document.getElementById('btn-load-insights')?.addEventListener('click', () => {
+            this.loadInsights();
+        });
+
+        // Initial load
+        this.loadMetadataStatus();
+        this.loadDataFreshness();
+    }
+
+    async loadDataFreshness() {
+        const textEl = document.getElementById('freshness-text');
+        if (!textEl) return;
+
+        try {
+            const response = await fetch('/api/scraper/database');
+            const data = await response.json();
+
+            const totalFights = data.total_fights || 0;
+            const dbSize = data.db_size_mb || 0;
+
+            // Get date range from fights
+            const dateResponse = await fetch('/api/data/dates');
+            const dateData = await dateResponse.json();
+            const range = dateData.date_range || {};
+
+            if (range.oldest_date && range.newest_date) {
+                const oldest = new Date(range.oldest_date * 1000).toLocaleDateString();
+                const newest = new Date(range.newest_date * 1000).toLocaleDateString();
+                textEl.innerHTML = `<strong>${totalFights.toLocaleString()}</strong> fights from <strong>${oldest}</strong> to <strong>${newest}</strong> (${dbSize.toFixed(1)} MB)`;
+            } else {
+                textEl.innerHTML = `<strong>${totalFights.toLocaleString()}</strong> fights in database (${dbSize.toFixed(1)} MB)`;
+            }
+        } catch (error) {
+            textEl.textContent = 'Unable to load data info';
+        }
+    }
+
+    async loadInsights() {
+        const container = document.getElementById('insights-container');
+        container.innerHTML = '<p class="loading-state">Analyzing build trends...</p>';
+
+        try {
+            const response = await fetch('/api/metadata/insights');
+            const data = await response.json();
+
+            if (data.error) {
+                container.innerHTML = `<p class="empty-state">Error: ${data.error}</p>`;
+                return;
+            }
+
+            if (!data.insights || data.insights.length === 0) {
+                container.innerHTML = '<p class="empty-state">No insights available yet</p>';
+                return;
+            }
+
+            container.innerHTML = data.insights.map(insight => `
+                <div class="insight-item ${insight.type}">
+                    <span class="insight-icon">${insight.icon}</span>
+                    <span class="insight-text">${insight.text}</span>
+                </div>
+            `).join('');
+
+            this.addLog('builds', 'success', `Generated ${data.insights.length} insights`);
+
+        } catch (error) {
+            console.error('Failed to load insights:', error);
+            container.innerHTML = `<p class="empty-state">Failed to load: ${error.message}</p>`;
+        }
+    }
+
+    async loadEvolutionData() {
+        const nClusters = document.getElementById('evolution-clusters')?.value || '6';
+        const url = `/api/metadata/clusters/evolution?n_clusters=${nClusters}`;
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.error) {
+                console.error('Evolution data error:', data.error);
+                this.addLog('builds', 'error', `Evolution analysis failed: ${data.error}`);
+                return;
+            }
+
+            this.renderEvolutionChart(data);
+            this.addLog('builds', 'success', `Loaded evolution data from ${data.sample_count.toLocaleString()} samples`);
+
+        } catch (error) {
+            console.error('Failed to load evolution data:', error);
+            this.addLog('builds', 'error', `Evolution analysis failed: ${error.message}`);
+        }
+    }
+
+    renderEvolutionChart(data) {
+        const canvas = document.getElementById('evolution-chart');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+
+        // Destroy existing chart
+        if (this.evolutionChart) {
+            this.evolutionChart.destroy();
+        }
+
+        const { evolution, archetypes, archetype_colors } = data;
+
+        // Build labels (level ranges)
+        const labels = evolution.map(e => e.level_range);
+
+        // Build datasets for stacked area chart
+        const datasets = archetypes.map(archetype => {
+            const color = archetype_colors[archetype] || '#8b949e';
+            const dataPoints = evolution.map(e => {
+                const cluster = e.clusters[archetype];
+                return cluster ? cluster.pct : 0;
+            });
+
+            return {
+                label: archetype,
+                data: dataPoints,
+                backgroundColor: color + 'cc',  // Semi-transparent
+                borderColor: color,
+                borderWidth: 1,
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+            };
+        });
+
+        this.evolutionChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                scales: {
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Level Range',
+                            color: '#8b949e'
+                        },
+                        ticks: { color: '#8b949e' },
+                        grid: { color: 'rgba(48, 54, 61, 0.5)' }
+                    },
+                    y: {
+                        stacked: true,
+                        min: 0,
+                        max: 100,
+                        title: {
+                            display: true,
+                            text: '% of Builds',
+                            color: '#8b949e'
+                        },
+                        ticks: { color: '#8b949e' },
+                        grid: { color: 'rgba(48, 54, 61, 0.5)' }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false  // We'll use custom legend
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `${context.dataset.label}: ${context.raw.toFixed(1)}%`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Render custom legend with totals
+        this.renderEvolutionLegend(data);
+    }
+
+    renderEvolutionLegend(data) {
+        const container = document.getElementById('evolution-legend');
+        if (!container) return;
+
+        const { evolution, archetypes, archetype_colors } = data;
+
+        // Calculate overall percentages
+        const totals = {};
+        let grandTotal = 0;
+
+        for (const archetype of archetypes) {
+            totals[archetype] = 0;
+        }
+
+        for (const bucket of evolution) {
+            for (const [archetype, info] of Object.entries(bucket.clusters)) {
+                totals[archetype] = (totals[archetype] || 0) + info.count;
+                grandTotal += info.count;
+            }
+        }
+
+        // Sort by total count
+        const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+
+        container.innerHTML = sorted.map(([archetype, count]) => {
+            const color = archetype_colors[archetype] || '#8b949e';
+            const pct = grandTotal > 0 ? (count / grandTotal * 100).toFixed(1) : 0;
+            return `
+                <div class="evolution-legend-item">
+                    <span class="dot" style="background-color: ${color}"></span>
+                    <span>${archetype}</span>
+                    <span class="pct">${pct}%</span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    async loadClusterData() {
+        const levelMin = document.getElementById('cluster-level-min')?.value || '1';
+        const levelMax = document.getElementById('cluster-level-max')?.value || '301';
+        const nClusters = document.getElementById('cluster-count')?.value || '6';
+
+        const url = `/api/metadata/clusters?n_clusters=${nClusters}&level_min=${levelMin}&level_max=${levelMax}`;
+
+        const container = document.getElementById('clusters-container');
+        container.innerHTML = '<p class="loading-state">Analyzing build archetypes...</p>';
+
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.error) {
+                container.innerHTML = `<p class="empty-state">Error: ${data.error}</p>`;
+                this.addLog('builds', 'error', `Cluster analysis failed: ${data.error}`);
+                return;
+            }
+
+            // Update stats
+            document.getElementById('cluster-sample-count').textContent = data.sample_count.toLocaleString();
+            document.getElementById('cluster-archetype-count').textContent = data.n_clusters;
+
+            // Render clusters
+            this.renderClusters(data.clusters);
+            this.addLog('builds', 'success', `Found ${data.clusters.length} archetypes from ${data.sample_count.toLocaleString()} samples`);
+
+        } catch (error) {
+            console.error('Failed to load cluster data:', error);
+            container.innerHTML = `<p class="empty-state">Failed to load data: ${error.message}</p>`;
+            this.addLog('builds', 'error', `Cluster analysis failed: ${error.message}`);
+        }
+    }
+
+    renderClusters(clusters) {
+        const container = document.getElementById('clusters-container');
+
+        if (!clusters || clusters.length === 0) {
+            container.innerHTML = '<p class="empty-state">No clusters found. Try adjusting parameters.</p>';
+            return;
+        }
+
+        let html = '';
+
+        for (const cluster of clusters) {
+            // Determine card class based on archetype
+            let cardClass = 'hybrid';
+            const archLower = cluster.archetype.toLowerCase();
+            if (archLower.includes('strength')) cardClass = 'strength';
+            else if (archLower.includes('agility')) cardClass = 'agility';
+            else if (archLower.includes('magic')) cardClass = 'magic';
+            else if (archLower.includes('tank')) cardClass = 'tank';
+
+            // Find dominant stat
+            const stats = cluster.centroid;
+            const statValues = [
+                { name: 'STR', value: stats.strength, key: 'strength' },
+                { name: 'AGI', value: stats.agility, key: 'agility' },
+                { name: 'MAG', value: stats.magic, key: 'magic' },
+                { name: 'RES', value: stats.resistance, key: 'resistance' }
+            ];
+            const maxStat = Math.max(...statValues.map(s => s.value));
+
+            // Build stat boxes
+            const statBoxes = statValues.map(s => {
+                const pct = (s.value * 100).toFixed(1);
+                const dominant = s.value === maxStat ? 'dominant' : '';
+                return `<div class="cluster-stat ${dominant}">
+                    <span class="stat-name">${s.name}</span>
+                    <span class="stat-pct">${pct}%</span>
+                </div>`;
+            }).join('');
+
+            // Build equipment tags
+            let equipmentHtml = '';
+            if (cluster.top_weapons && cluster.top_weapons.length > 0) {
+                const weaponTags = cluster.top_weapons.slice(0, 3).map(w => {
+                    const name = Array.isArray(w) ? w[0] : w.name;
+                    return `<span class="equipment-tag weapon">${name}</span>`;
+                }).join('');
+                equipmentHtml += `<div class="cluster-equipment-list">${weaponTags}</div>`;
+            }
+            if (cluster.top_chips && cluster.top_chips.length > 0) {
+                const chipTags = cluster.top_chips.slice(0, 4).map(c => {
+                    const name = Array.isArray(c) ? c[0] : c.name;
+                    return `<span class="equipment-tag chip">${name}</span>`;
+                }).join('');
+                equipmentHtml += `<div class="cluster-equipment-list" style="margin-top: 4px;">${chipTags}</div>`;
+            }
+
+            html += `
+                <div class="cluster-card ${cardClass}">
+                    <div class="cluster-header">
+                        <span class="cluster-name">${cluster.archetype}</span>
+                        <span class="cluster-size">${cluster.size.toLocaleString()} leeks</span>
+                    </div>
+                    <div class="cluster-body">
+                        <div class="cluster-radar">
+                            <canvas id="radar-${cluster.id}" width="100" height="100"></canvas>
+                        </div>
+                        <div class="cluster-info">
+                            <div class="cluster-stats">${statBoxes}</div>
+                            <div class="cluster-avg-level">
+                                <span>Avg Level:</span>
+                                <span class="value">${cluster.avg_level.toFixed(0)}</span>
+                            </div>
+                        </div>
+                    </div>
+                    ${equipmentHtml ? `<div class="cluster-equipment">
+                        <div class="cluster-equipment-title">Popular Equipment</div>
+                        ${equipmentHtml}
+                    </div>` : ''}
+                </div>
+            `;
+        }
+
+        container.innerHTML = html;
+
+        // Render radar charts for each cluster
+        for (const cluster of clusters) {
+            this.renderClusterRadar(cluster);
+        }
+    }
+
+    renderClusterRadar(cluster) {
+        const canvas = document.getElementById(`radar-${cluster.id}`);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const stats = cluster.centroid;
+
+        // Destroy existing chart if any
+        if (this.clusterRadars && this.clusterRadars[cluster.id]) {
+            this.clusterRadars[cluster.id].destroy();
+        }
+        if (!this.clusterRadars) this.clusterRadars = {};
+
+        // Color based on archetype
+        let color = '#58a6ff';
+        const arch = cluster.archetype.toLowerCase();
+        if (arch.includes('str')) color = '#f85149';
+        else if (arch.includes('agi')) color = '#3fb950';
+        else if (arch.includes('mag')) color = '#a371f7';
+        else if (arch.includes('res') || arch.includes('tank')) color = '#d29922';
+
+        this.clusterRadars[cluster.id] = new Chart(ctx, {
+            type: 'radar',
+            data: {
+                labels: ['STR', 'AGI', 'MAG', 'RES'],
+                datasets: [{
+                    data: [
+                        stats.strength * 100,
+                        stats.agility * 100,
+                        stats.magic * 100,
+                        stats.resistance * 100
+                    ],
+                    backgroundColor: color + '40',
+                    borderColor: color,
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointBackgroundColor: color,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    r: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: { display: false, stepSize: 25 },
+                        pointLabels: {
+                            color: '#8b949e',
+                            font: { size: 9 }
+                        },
+                        grid: { color: '#30363d' },
+                        angleLines: { color: '#30363d' }
+                    }
+                }
+            }
+        });
+    }
+
+    async loadCooccurrenceData() {
+        const levelBucket = document.getElementById('cooccurrence-level')?.value || '';
+        const itemType = document.getElementById('cooccurrence-type')?.value || '';
+
+        let url = '/api/metadata/cooccurrence?min_cooccurrence=20';
+        if (levelBucket) url += `&level_bucket=${levelBucket}`;
+        if (itemType) url += `&item_type=${itemType}`;
+
+        const heatmapContainer = document.getElementById('cooccurrence-heatmap');
+        const statsContainer = document.getElementById('cooccurrence-stats');
+
+        try {
+            heatmapContainer.innerHTML = '<p class="loading-state">Loading co-occurrence data...</p>';
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.error) {
+                heatmapContainer.innerHTML = `<p class="empty-state">Error: ${data.error}</p>`;
+                return;
+            }
+
+            if (!data.items || data.items.length === 0) {
+                heatmapContainer.innerHTML = '<p class="empty-state">No co-occurrence data available. Try lowering the minimum threshold.</p>';
+                return;
+            }
+
+            this.renderCooccurrenceHeatmap(data);
+            this.renderCooccurrenceStats(data);
+            this.addLog('builds', 'info', `Loaded co-occurrence data for ${data.items.length} items`);
+
+        } catch (error) {
+            console.error('Failed to load co-occurrence data:', error);
+            heatmapContainer.innerHTML = `<p class="empty-state">Failed to load data: ${error.message}</p>`;
+        }
+    }
+
+    renderCooccurrenceHeatmap(data) {
+        const container = document.getElementById('cooccurrence-heatmap');
+        const legendContainer = document.getElementById('cooccurrence-legend');
+        const { items, matrix } = data;
+
+        if (!items || items.length === 0) {
+            container.innerHTML = '<p class="empty-state">No data to display</p>';
+            return;
+        }
+
+        // Find max value for scaling
+        let maxVal = 0;
+        for (const row of matrix) {
+            for (const val of row) {
+                if (val > maxVal) maxVal = val;
+            }
+        }
+
+        // Build heatmap table
+        let html = '<table class="heatmap-table"><thead><tr><th></th>';
+        for (const item of items) {
+            const shortName = item.name.substring(0, 8);
+            html += `<th title="${item.name}">${shortName}</th>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        for (let i = 0; i < items.length; i++) {
+            html += `<tr><th class="row-header" title="${items[i].name}">${items[i].name.substring(0, 10)}</th>`;
+            for (let j = 0; j < items.length; j++) {
+                const val = matrix[i][j];
+                const intensity = maxVal > 0 ? val / maxVal : 0;
+                const color = this.getHeatmapColor(intensity);
+                const title = `${items[i].name} + ${items[j].name}: ${val}`;
+                html += `<td class="heatmap-cell" style="background-color: ${color}" title="${title}">${val > 0 ? '' : ''}</td>`;
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+
+        container.innerHTML = html;
+
+        // Build legend
+        legendContainer.innerHTML = `
+            <div class="legend-gradient"></div>
+            <div class="legend-labels">
+                <span>${maxVal}</span>
+                <span>${Math.round(maxVal * 0.66)}</span>
+                <span>${Math.round(maxVal * 0.33)}</span>
+                <span>0</span>
+            </div>
+        `;
+    }
+
+    getHeatmapColor(intensity) {
+        // Purple gradient from dark to bright
+        const r = Math.round(48 + (163 - 48) * intensity);
+        const g = Math.round(54 + (113 - 54) * intensity);
+        const b = Math.round(61 + (247 - 61) * intensity);
+        const alpha = 0.3 + intensity * 0.7;
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    renderCooccurrenceStats(data) {
+        const container = document.getElementById('cooccurrence-stats');
+        const { items, matrix, counts } = data;
+
+        // Find top pairs
+        const pairs = [];
+        for (let i = 0; i < items.length; i++) {
+            for (let j = i + 1; j < items.length; j++) {
+                if (matrix[i][j] > 0) {
+                    pairs.push({
+                        item1: items[i],
+                        item2: items[j],
+                        count: matrix[i][j]
+                    });
+                }
+            }
+        }
+        pairs.sort((a, b) => b.count - a.count);
+        const topPairs = pairs.slice(0, 5);
+
+        // Calculate stats
+        const totalPairs = pairs.reduce((sum, p) => sum + p.count, 0);
+        const weaponCount = items.filter(i => i.type === 'weapon').length;
+        const chipCount = items.filter(i => i.type === 'chip').length;
+
+        let html = `
+            <div class="cooccurrence-stat">
+                <span class="label">Total Items</span>
+                <span class="value">${items.length}</span>
+            </div>
+            <div class="cooccurrence-stat">
+                <span class="label">Weapons</span>
+                <span class="value">${weaponCount}</span>
+            </div>
+            <div class="cooccurrence-stat">
+                <span class="label">Chips</span>
+                <span class="value">${chipCount}</span>
+            </div>
+            <div class="cooccurrence-stat">
+                <span class="label">Total Pairs</span>
+                <span class="value">${totalPairs.toLocaleString()}</span>
+            </div>
+        `;
+
+        if (topPairs.length > 0) {
+            html += '<div class="top-pairs-list" style="width: 100%; margin-top: 12px;"><strong>Top Equipment Pairs:</strong>';
+            for (const pair of topPairs) {
+                const type1Class = pair.item1.type === 'weapon' ? 'weapon' : 'chip';
+                const type2Class = pair.item2.type === 'weapon' ? 'weapon' : 'chip';
+                html += `
+                    <div class="pair-item">
+                        <div class="pair-names">
+                            <span class="pair-name ${type1Class}">${pair.item1.name}</span>
+                            <span>+</span>
+                            <span class="pair-name ${type2Class}">${pair.item2.name}</span>
+                        </div>
+                        <span class="pair-count">${pair.count}</span>
+                    </div>
+                `;
+            }
+            html += '</div>';
+        }
+
+        container.innerHTML = html;
+    }
 }
 
 // Initialize dashboard when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     window.dashboard = new Dashboard();
     window.dashboard.loadHistory();
+    window.dashboard.setupBuildsTab();
     window.dashboard.addLog('training', 'info', 'Dashboard initialized');
 });
