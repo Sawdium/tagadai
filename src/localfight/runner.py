@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Optional
 
 from .scenario import Scenario
+from src.common.config import get_paths
 
-# Path to the generator (relative to project root)
-GENERATOR_DIR = Path(__file__).parent.parent.parent / ".cache" / "leek-wars-generator"
-GENERATOR_JAR = GENERATOR_DIR / "generator.jar"
+# Path to the generator (uses centralized config)
+_paths = get_paths()
+GENERATOR_DIR = _paths.generator_dir
+GENERATOR_JAR = _paths.generator_jar
 
 
 class RunnerError(Exception):

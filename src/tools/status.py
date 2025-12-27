@@ -7,14 +7,14 @@ Usage:
     python -m src.tools.status --json   # JSON output for programmatic use
 """
 
-import os
 import sys
 import json
 import argparse
-import requests
 from dataclasses import dataclass, asdict
 from typing import Optional
-from dotenv import load_dotenv
+
+from src.common import LeekWarsAPI, load_credentials
+from src.common.errors import TagadAIError
 
 
 @dataclass
@@ -53,43 +53,6 @@ class AccountStatus:
     leeks: list[LeekInfo]
     ai_files: list[AIFile]
     ai_folders: list[dict]
-
-
-class LeekWarsAPI:
-    """Simple API client for status queries."""
-
-    BASE_URL = "https://leekwars.com/api"
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.token: Optional[str] = None
-        self.farmer: Optional[dict] = None
-
-    def login(self, login: str, password: str) -> dict:
-        """Authenticate and store token."""
-        r = self.session.post(
-            f"{self.BASE_URL}/farmer/login-token",
-            data={"login": login, "password": password}
-        )
-        data = r.json()
-
-        if "error" in data and len(data) == 1:
-            raise Exception(f"Login failed: {data.get('error')}")
-
-        self.token = data.get("token")
-        self.farmer = data.get("farmer")
-        self.session.headers["Authorization"] = f"Bearer {self.token}"
-        return self.farmer
-
-    def get_farmer_ais(self) -> dict:
-        """Get all AI files for the farmer."""
-        r = self.session.get(f"{self.BASE_URL}/ai/get-farmer-ais")
-        return r.json()
-
-    def get_garden(self) -> dict:
-        """Get garden state (includes compositions)."""
-        r = self.session.get(f"{self.BASE_URL}/garden/get")
-        return r.json()
 
 
 def get_status(api: LeekWarsAPI) -> AccountStatus:
@@ -226,16 +189,8 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
-    # Load credentials
-    load_dotenv()
-    login = os.getenv("LEEKWARS_LOGIN")
-    password = os.getenv("LEEKWARS_PASSWORD")
-
-    if not login or not password:
-        print("ERROR: Missing LEEKWARS_LOGIN or LEEKWARS_PASSWORD in .env", file=sys.stderr)
-        sys.exit(1)
-
     try:
+        login, password = load_credentials()
         api = LeekWarsAPI()
         api.login(login, password)
         status = get_status(api)
@@ -245,6 +200,9 @@ def main():
         else:
             print(format_human_readable(status))
 
+    except TagadAIError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)

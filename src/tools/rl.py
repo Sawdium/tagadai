@@ -10,13 +10,9 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Optional
-
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.localfight.runner import check_generator, run_fight
 from src.localfight.scenario import Scenario

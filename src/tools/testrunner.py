@@ -13,7 +13,6 @@ Usage:
     python -m src.tools.testrunner --cleanup          # Remove test scenario
 """
 
-import os
 import sys
 import json
 import time
@@ -21,10 +20,10 @@ import argparse
 import re
 from pathlib import Path
 from typing import Optional
-from dotenv import load_dotenv
 
-# Import from fight module
-from src.tools.fight import LeekWarsAPI, wait_for_fight, fetch_fight_logs
+from src.common import LeekWarsAPI, load_credentials
+from src.common.errors import TagadAIError
+from src.tools.fight import wait_for_fight, fetch_fight_logs
 
 # Test configuration
 TEST_SCENARIO_NAME = "TagadAI_TestRunner"
@@ -34,12 +33,10 @@ DUMMY_LEEK_NAME = "TestDummy"
 
 def get_api() -> tuple[LeekWarsAPI, dict]:
     """Initialize API and login."""
-    load_dotenv()
-    login = os.getenv("LEEKWARS_LOGIN")
-    password = os.getenv("LEEKWARS_PASSWORD")
-
-    if not login or not password:
-        print("ERROR: Missing credentials in .env", file=sys.stderr)
+    try:
+        login, password = load_credentials()
+    except TagadAIError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
     api = LeekWarsAPI()

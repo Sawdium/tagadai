@@ -14,115 +14,12 @@ Usage:
     python -m src.tools.aisync download <dir>           # Download all AI files to directory
 """
 
-import os
 import sys
 import json
 import argparse
-import requests
-from typing import Optional
-from dotenv import load_dotenv
 
-
-class LeekWarsAPI:
-    """API client for AI management."""
-
-    BASE_URL = "https://leekwars.com/api"
-
-    def __init__(self):
-        self.session = requests.Session()
-        self.token: Optional[str] = None
-        self.farmer: Optional[dict] = None
-
-    def login(self, login: str, password: str) -> dict:
-        r = self.session.post(
-            f"{self.BASE_URL}/farmer/login-token",
-            data={"login": login, "password": password}
-        )
-        data = r.json()
-        if "error" in data and len(data) == 1:
-            raise Exception(f"Login failed: {data.get('error')}")
-        self.token = data.get("token")
-        self.farmer = data.get("farmer")
-        self.session.headers["Authorization"] = f"Bearer {self.token}"
-        return self.farmer
-
-    def get_farmer_ais(self) -> dict:
-        """Get all AI files and folders."""
-        r = self.session.get(f"{self.BASE_URL}/ai/get-farmer-ais")
-        return r.json()
-
-    def get_ai(self, ai_id: int) -> dict:
-        """Get AI details including code."""
-        r = self.session.get(f"{self.BASE_URL}/ai/get/{ai_id}")
-        data = r.json()
-        if "error" in data:
-            raise Exception(f"Failed to get AI: {data.get('error')}")
-        return data
-
-    def save_ai(self, ai_id: int, code: str) -> dict:
-        """Save code to an AI file."""
-        r = self.session.post(
-            f"{self.BASE_URL}/ai/save",
-            data={"ai_id": ai_id, "code": code}
-        )
-        data = r.json()
-        if "error" in data:
-            raise Exception(f"Failed to save AI: {data.get('error')}")
-        return data
-
-    def create_ai(self, name: str, folder_id: int = 0, version: int = 4) -> dict:
-        """Create a new AI file."""
-        r = self.session.post(
-            f"{self.BASE_URL}/ai/new-name",
-            data={"folder_id": folder_id, "version": str(version), "name": name}
-        )
-        data = r.json()
-        if "error" in data:
-            raise Exception(f"Failed to create AI: {data.get('error')}")
-
-        return {"id": data["ai"]["id"], "name": name}
-
-    def rename_ai(self, ai_id: int, name: str) -> dict:
-        """Rename an AI file."""
-        r = self.session.post(
-            f"{self.BASE_URL}/ai/rename",
-            data={"ai_id": ai_id, "new_name": name}
-        )
-        data = r.json()
-        if "error" in data:
-            raise Exception(f"Failed to rename AI: {data.get('error')}")
-        return data
-
-    def create_folder(self, name: str, parent_id: int = 0) -> dict:
-        """Create a new folder."""
-        r = self.session.post(
-            f"{self.BASE_URL}/ai-folder/new/{parent_id}",
-            data={"folder_id": parent_id}
-        )
-        data = r.json()
-        if "error" in data:
-            raise Exception(f"Failed to create folder: {data.get('error')}")
-
-        folder_id = data["id"]
-
-        # Rename it
-        r = self.session.post(
-            f"{self.BASE_URL}/ai-folder/rename/{folder_id}/{name}",
-            data={"folder_id": folder_id, "new_name": name}
-        )
-
-        return {"id": folder_id, "name": name}
-
-    def delete_ai(self, ai_id: int) -> dict:
-        """Delete an AI file."""
-        r = self.session.delete(
-            f"{self.BASE_URL}/ai/delete",
-            data={"ai_id": ai_id}
-        )
-        data = r.json()
-        if "error" in data:
-            raise Exception(f"Failed to delete AI: {data.get('error')}")
-        return data
+from src.common import LeekWarsAPI, load_credentials
+from src.common.errors import TagadAIError
 
 
 def cmd_list(api: LeekWarsAPI, args):
@@ -357,15 +254,8 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    load_dotenv()
-    login = os.getenv("LEEKWARS_LOGIN")
-    password = os.getenv("LEEKWARS_PASSWORD")
-
-    if not login or not password:
-        print("ERROR: Missing credentials in .env", file=sys.stderr)
-        sys.exit(1)
-
     try:
+        login, password = load_credentials()
         api = LeekWarsAPI()
         api.login(login, password)
 
@@ -386,6 +276,9 @@ def main():
         elif args.command == "download":
             cmd_download(api, args)
 
+    except TagadAIError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)

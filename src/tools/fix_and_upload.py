@@ -7,10 +7,9 @@ import os
 import sys
 import re
 import time
-from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.dirname(__file__))
-from aisync import LeekWarsAPI
+from src.common import LeekWarsAPI, load_credentials
+from src.common.errors import TagadAIError
 
 # Files to upload in order (from auto include list)
 FILES_TO_UPLOAD = [
@@ -61,17 +60,15 @@ def fix_code(code: str, is_main: bool = False) -> str:
 
 
 def main():
-    load_dotenv()
-    login = os.getenv("LEEKWARS_LOGIN")
-    password = os.getenv("LEEKWARS_PASSWORD")
-
-    if not login or not password:
-        print("ERROR: Missing credentials in .env", file=sys.stderr)
+    try:
+        login, password = load_credentials()
+    except TagadAIError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
     api = LeekWarsAPI()
     api.login(login, password)
-    print(f"Logged in as {api.farmer['name']}")
+    print(f"Logged in as {api.farmer['login']}")
 
     # Get existing structure
     data = api.get_farmer_ais()

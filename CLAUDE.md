@@ -18,6 +18,11 @@ tagadai/
 ├── docs/
 │   └── LEEKWARS_API.md       # Complete API reference (extracted from source)
 ├── src/
+│   ├── common/               # Shared utilities (API client, config, errors)
+│   │   ├── api.py            # Unified LeekWarsAPI client
+│   │   ├── config.py         # Centralized path configuration
+│   │   ├── credentials.py    # Credential loading from .env
+│   │   └── errors.py         # Custom exception hierarchy
 │   ├── tools/                # CLI tools for interacting with LeekWars
 │   │   ├── status.py         # Account status display
 │   │   ├── fight.py          # Run fights (test or real)
@@ -83,6 +88,33 @@ Combat AI written in **LeekScript v4** (~30 core files, modular architecture). T
 
 **TODO.md**: Tracks static analysis issues and improvements
 
+## Common Module
+
+The `src/common/` module provides shared utilities used across all tools:
+
+```python
+from src.common import LeekWarsAPI, load_credentials, get_project_root
+from src.common.errors import TagadAIError, APIError, AuthenticationError
+
+# Load credentials from .env
+login, password = load_credentials()
+
+# Create and authenticate API client
+api = LeekWarsAPI()
+api.login(login, password)
+
+# Use any API method
+farmer_ais = api.get_farmer_ais()
+opponents = api.get_leek_opponents(leek_id)
+fight_id = api.start_test_fight(ai_id)
+```
+
+**Components:**
+- `api.py` - Unified `LeekWarsAPI` client with all endpoints
+- `config.py` - `ProjectPaths` class for centralized path management
+- `credentials.py` - `load_credentials()` for secure credential loading
+- `errors.py` - Exception hierarchy (`TagadAIError`, `APIError`, `AuthenticationError`, etc.)
+
 ## CLI Tools
 
 Python tools in `src/tools/` for interacting with LeekWars. Run from project root.
@@ -96,7 +128,8 @@ Shows: farmer name, talent, habs, fights available, leeks (with levels/talent/ca
 
 ### Fight
 ```bash
-python -m src.tools.fight                    # Test fight vs Domingo (FREE - use this for testing!)
+python -m src.tools.fight                    # Test fight vs Domingo (default, passive)
+python -m src.tools.fight --scenario 37772   # Test fight vs SimpleOpponent (RECOMMENDED - actually fights!)
 python -m src.tools.fight --json             # Output raw fight JSON
 python -m src.tools.fight --real             # REAL solo fight (costs 1 fight)
 python -m src.tools.fight --real --farmer    # REAL farmer fight (costs 1 fight)
@@ -104,6 +137,18 @@ python -m src.tools.fight --real --farmer    # REAL farmer fight (costs 1 fight)
 Outputs fight summary: winner, damage dealt/received, turn-by-turn breakdown.
 
 **Always prefer test fights** (no `--real` flag) when testing AI code - they're free and unlimited.
+
+**Test Scenarios:**
+- `--scenario 0` (default): Domingo - passive opponent, good for movement/positioning tests
+- `--scenario 37772`: SimpleAI_Test - SimpleOpponent that actively attacks, **use this for combat testing**
+
+To list available scenarios:
+```python
+from src.common import LeekWarsAPI, load_credentials
+api = LeekWarsAPI()
+api.login(*load_credentials())
+print(api.get_test_scenarios())
+```
 
 ### AI Code Sync
 ```bash
