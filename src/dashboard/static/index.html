@@ -6,6 +6,9 @@
     <title>TagadAI Training Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/css/scraper.css">
+    <link rel="stylesheet" href="/static/css/rl.css">
+    <link rel="stylesheet" href="/static/css/nn.css">
 </head>
 <body>
     <div class="container">
@@ -21,9 +24,10 @@
             </div>
         </header>
 
-        <!-- Tab Navigation (6 tabs) -->
+        <!-- Tab Navigation (7 tabs) -->
         <nav class="tabs">
             <button class="tab-btn active" data-tab="training">Training</button>
+            <button class="tab-btn" data-tab="nn">Neural Net</button>
             <button class="tab-btn" data-tab="rl">RL</button>
             <button class="tab-btn" data-tab="scraper">Scraper</button>
             <button class="tab-btn" data-tab="data">Data</button>
@@ -156,6 +160,122 @@
                             <div class="checkpoint-list compact" id="checkpoint-list">
                                 <p class="empty-state compact">No checkpoints yet</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ========== NEURAL NET TAB ========== -->
+            <section id="nn-tab" class="tab-content">
+                <!-- Control Row: Status + Buttons + Config -->
+                <div class="nn-control-row">
+                    <div class="nn-status-compact" id="nn-status-banner">
+                        <span class="status-icon" id="nn-status-icon">⏸️</span>
+                        <div class="status-text">
+                            <span class="status-title" id="nn-banner-title">Idle</span>
+                            <span class="status-subtitle" id="nn-banner-subtitle">Ready to train</span>
+                        </div>
+                    </div>
+                    <div class="nn-buttons">
+                        <button class="control-btn primary compact" id="btn-nn-train"><span class="icon">▶</span> Train</button>
+                        <button class="control-btn warning compact" id="btn-nn-pause" disabled><span class="icon">⏸</span> Pause</button>
+                        <button class="control-btn danger compact" id="btn-nn-stop" disabled><span class="icon">⏹</span> Stop</button>
+                        <button class="control-btn secondary compact" id="btn-nn-save"><span class="icon">💾</span> Save</button>
+                        <button class="control-btn secondary compact" id="btn-nn-export"><span class="icon">📤</span> Export</button>
+                    </div>
+                    <div class="nn-metrics-inline">
+                        <div class="metric"><span class="value" id="nn-metric-epoch">0/0</span><span class="label">Epoch</span></div>
+                        <div class="metric"><span class="value" id="nn-metric-accuracy">--</span><span class="label">Accuracy</span></div>
+                        <div class="metric"><span class="value" id="nn-metric-eta">--</span><span class="label">ETA</span></div>
+                    </div>
+                </div>
+
+                <!-- Config Row -->
+                <div class="nn-config-row">
+                    <div class="config-compact"><label>Max Level</label><input type="number" id="nn-config-max-level" value="40" min="1" max="301"></div>
+                    <div class="config-compact"><label>Fight Limit</label><input type="number" id="nn-config-fight-limit" value="" min="100" placeholder="All"></div>
+                    <div class="config-compact"><label>Epochs</label><input type="number" id="nn-config-epochs" value="50" min="1" max="500"></div>
+                    <div class="config-compact"><label>Batch</label><input type="number" id="nn-config-batch" value="64" min="16" max="512" step="16"></div>
+                    <div class="config-compact"><label>LR</label><input type="number" id="nn-config-lr" value="0.001" min="0.00001" max="0.1" step="0.0001"></div>
+                    <div class="config-compact"><label>Hidden 1</label><input type="number" id="nn-config-hidden1" value="32" min="8" max="128"></div>
+                    <div class="config-compact"><label>Hidden 2</label><input type="number" id="nn-config-hidden2" value="16" min="4" max="64"></div>
+                    <div class="config-compact"><label>Patience</label><input type="number" id="nn-config-patience" value="10" min="1" max="50"></div>
+                </div>
+
+                <!-- Progress Row -->
+                <div class="nn-progress-row">
+                    <div class="progress-item-compact">
+                        <span class="progress-label">Epoch</span>
+                        <div class="progress-bar-inline"><div class="progress-bar nn" id="nn-epoch-progress"></div></div>
+                        <span class="progress-value" id="nn-epoch-count">0 / 0</span>
+                    </div>
+                    <div class="timing-compact">
+                        <span><strong id="nn-elapsed-time">0s</strong> elapsed</span>
+                        <span>ETA: <strong id="nn-eta-time">--</strong></span>
+                        <span><strong id="nn-examples-count">0</strong> examples</span>
+                    </div>
+                </div>
+
+                <!-- Main Grid: Charts + Sidebar -->
+                <div class="nn-main-grid">
+                    <!-- Charts Column -->
+                    <div class="nn-charts-column">
+                        <div class="nn-charts-grid">
+                            <div class="card compact">
+                                <h3>Loss</h3>
+                                <div class="chart-container" style="height: 180px;">
+                                    <canvas id="nn-loss-chart"></canvas>
+                                </div>
+                            </div>
+                            <div class="card compact">
+                                <h3>Accuracy</h3>
+                                <div class="chart-container" style="height: 180px;">
+                                    <canvas id="nn-accuracy-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card compact">
+                            <h3>Training Details</h3>
+                            <div class="nn-details-grid">
+                                <div class="nn-detail"><span class="label">Train Loss</span><span class="value" id="nn-train-loss">--</span></div>
+                                <div class="nn-detail"><span class="label">Val Loss</span><span class="value" id="nn-val-loss">--</span></div>
+                                <div class="nn-detail"><span class="label">Best Val Loss</span><span class="value" id="nn-best-val-loss">--</span></div>
+                                <div class="nn-detail"><span class="label">Best Epoch</span><span class="value" id="nn-best-epoch">--</span></div>
+                                <div class="nn-detail"><span class="label">Learning Rate</span><span class="value" id="nn-current-lr">--</span></div>
+                                <div class="nn-detail"><span class="label">Model Params</span><span class="value" id="nn-model-params">--</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sidebar: Data Info + Models -->
+                    <div class="nn-sidebar">
+                        <div class="card compact">
+                            <div class="card-header-inline">
+                                <h2>Training Data</h2>
+                                <button class="btn small" id="btn-nn-refresh-data">↻</button>
+                            </div>
+                            <div class="nn-data-info" id="nn-data-info">
+                                <div class="nn-data-stat"><span class="label">Solo Fights</span><span class="value" id="nn-data-solo">--</span></div>
+                                <div class="nn-data-stat"><span class="label">Low Level (≤40)</span><span class="value" id="nn-data-low-level">--</span></div>
+                                <div class="nn-data-stat"><span class="label">Train Examples</span><span class="value" id="nn-data-train">--</span></div>
+                                <div class="nn-data-stat"><span class="label">Val Examples</span><span class="value" id="nn-data-val">--</span></div>
+                            </div>
+                        </div>
+                        <div class="card compact">
+                            <div class="card-header-inline">
+                                <h2>Saved Models</h2>
+                            </div>
+                            <div class="nn-models-list" id="nn-models-list">
+                                <p class="empty-state compact">No models saved</p>
+                            </div>
+                        </div>
+                        <div class="card compact">
+                            <h2>Export</h2>
+                            <div class="nn-export-config">
+                                <input type="text" id="nn-export-dir" value="tagadann/NN" placeholder="Output directory">
+                                <button class="btn primary" id="btn-nn-do-export">Export to LeekScript</button>
+                            </div>
+                            <div class="nn-export-status" id="nn-export-status"></div>
                         </div>
                     </div>
                 </div>
@@ -653,5 +773,8 @@
     <div id="notifications" class="notifications-container"></div>
 
     <script src="/static/app.js"></script>
+    <script src="/static/nn.js"></script>
+    <script src="/static/rl.js"></script>
+    <script src="/static/scraper.js"></script>
 </body>
 </html>

@@ -1,0 +1,263 @@
+/* ========== NEURAL NET TAB STYLES ========== */
+
+.nn-control-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.nn-status-compact {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    min-width: 140px;
+}
+
+.nn-status-compact.loading {
+    background: linear-gradient(135deg, #388bfd22 0%, #1f6feb11 100%);
+    border: 1px solid #388bfd44;
+}
+
+.nn-status-compact.running,
+.nn-status-compact.training {
+    background: linear-gradient(135deg, #3fb95022 0%, #23863511 100%);
+    border: 1px solid #3fb95044;
+}
+
+.nn-status-compact.paused {
+    background: linear-gradient(135deg, #d2992222 0%, #bb800011 100%);
+    border: 1px solid #d2992244;
+}
+
+.nn-status-compact.success,
+.nn-status-compact.done {
+    background: linear-gradient(135deg, #3fb95022 0%, #23863511 100%);
+    border: 1px solid #3fb95044;
+}
+
+.nn-status-compact.error {
+    background: linear-gradient(135deg, #f8514922 0%, #da363311 100%);
+    border: 1px solid #f8514944;
+}
+
+.nn-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.nn-metrics-inline {
+    display: flex;
+    gap: 16px;
+    margin-left: auto;
+}
+
+.nn-metrics-inline .metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.nn-metrics-inline .value {
+    font-size: 16px;
+    font-weight: 600;
+    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text-primary);
+}
+
+.nn-metrics-inline .label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.nn-config-row {
+    display: flex;
+    gap: 12px;
+    padding: 12px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.nn-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+.nn-progress-row .progress-item-compact {
+    flex: 1;
+}
+
+.progress-bar.nn {
+    background: linear-gradient(90deg, #a371f7 0%, #8957e5 100%);
+}
+
+.nn-main-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 16px;
+}
+
+@media (max-width: 1200px) {
+    .nn-main-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.nn-charts-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.nn-charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+@media (max-width: 900px) {
+    .nn-charts-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.nn-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.nn-details-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.nn-detail {
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.nn-detail .label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.nn-detail .value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.nn-data-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.nn-data-stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.nn-data-stat .label {
+    color: var(--text-secondary);
+}
+
+.nn-data-stat .value {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.nn-models-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.nn-model-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.nn-model-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.nn-model-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.nn-model-date {
+    font-size: 10px;
+    color: var(--text-secondary);
+}
+
+.nn-model-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.nn-model-actions .btn {
+    padding: 4px 8px;
+    font-size: 10px;
+}
+
+.nn-export-config {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.nn-export-config input {
+    flex: 1;
+}
+
+.nn-export-status {
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+.nn-export-status .success {
+    color: #3fb950;
+}
+
+.nn-export-status .error {
+    color: #f85149;
+}

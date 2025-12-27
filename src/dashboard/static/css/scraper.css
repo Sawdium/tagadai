@@ -1,0 +1,194 @@
+/* ========== SCRAPER TAB STYLES ========== */
+
+.scraper-control-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.scraper-status-compact {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 120px;
+}
+
+.scraper-status-compact .status-icon {
+    font-size: 18px;
+}
+
+.scraper-status-compact .status-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.scraper-status-compact .status-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.scraper-status-compact .status-subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.scraper-status-compact.running .status-title {
+    color: var(--accent-green);
+}
+
+.scraper-status-compact.paused .status-title {
+    color: var(--accent-yellow);
+}
+
+.scraper-status-compact.error .status-title {
+    color: var(--accent-red);
+}
+
+.scraper-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.scraper-config-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.scraper-config-inline input {
+    width: 60px;
+    padding: 4px 8px;
+    font-size: 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.scraper-config-inline .unit {
+    color: var(--text-secondary);
+}
+
+.scraper-metrics-inline {
+    display: flex;
+    gap: 16px;
+    margin-left: auto;
+}
+
+.scraper-metrics-inline .metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.scraper-metrics-inline .value {
+    font-size: 16px;
+    font-weight: 600;
+    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text-primary);
+}
+
+.scraper-metrics-inline .label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+/* Stats Row */
+.scraper-stats-row {
+    display: flex;
+    gap: 6px;
+    padding: 6px 10px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+/* Main Grid */
+.scraper-main-grid {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.scraper-simple-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.scraper-right-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* DB Breakdown Compact */
+.db-breakdown-compact {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.db-breakdown-compact .stat-compact {
+    flex: 1;
+    min-width: 80px;
+}
+
+/* Analytics Row */
+.scraper-analytics-row {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.scraper-analytics-row .card {
+    min-height: 160px;
+}
+
+.scraper-analytics-row .chart-container {
+    position: relative;
+    width: 100%;
+}
+
+/* Charts Column */
+.scraper-charts-column {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.scraper-charts-column .card {
+    margin-bottom: 0;
+}
+
+/* Scraper Responsive */
+@media (max-width: 900px) {
+    .scraper-main-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .scraper-simple-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .scraper-metrics-inline {
+        margin-left: 0;
+        width: 100%;
+        justify-content: space-around;
+    }
+}

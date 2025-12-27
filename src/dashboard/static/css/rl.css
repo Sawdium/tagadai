@@ -1,0 +1,280 @@
+/* ========== RL TAB STYLES ========== */
+
+.rl-control-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.rl-status-compact {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 120px;
+}
+
+.rl-status-compact .status-icon {
+    font-size: 18px;
+}
+
+.rl-status-compact .status-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+
+.rl-status-compact .status-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.rl-status-compact .status-subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.rl-status-compact.running .status-title {
+    color: var(--accent-green);
+}
+
+.rl-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.rl-config-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.rl-config-inline select,
+.rl-config-inline input {
+    padding: 4px 8px;
+    font-size: 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.rl-config-inline select {
+    min-width: 150px;
+}
+
+.rl-config-inline input {
+    width: 60px;
+}
+
+.rl-metrics-inline {
+    display: flex;
+    gap: 16px;
+    margin-left: auto;
+}
+
+.rl-metrics-inline .metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.rl-metrics-inline .value {
+    font-size: 16px;
+    font-weight: 600;
+    font-family: 'SF Mono', Monaco, monospace;
+    color: var(--text-primary);
+}
+
+.rl-metrics-inline .label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.rl-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 10px 16px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.progress-bar.rl {
+    background: linear-gradient(90deg, var(--accent-purple), var(--accent-blue));
+}
+
+.rl-main-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+/* Duel Config */
+.duel-config {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.duel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.duel-row label {
+    min-width: 50px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.duel-row input {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+}
+
+.duel-result {
+    margin-top: 12px;
+    padding: 12px;
+    background-color: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.duel-outcome {
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.duel-outcome.win {
+    color: var(--accent-green);
+}
+
+.duel-outcome.loss {
+    color: var(--accent-red);
+}
+
+.duel-outcome.draw {
+    color: var(--accent-yellow);
+}
+
+.duel-stats {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.duel-stats strong {
+    color: var(--text-primary);
+}
+
+/* Scenario Results */
+.scenario-results {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.scenario-result {
+    padding: 10px;
+    background-color: var(--bg-tertiary);
+    border-radius: 6px;
+}
+
+.scenario-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.scenario-stats {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* Telemetry Display */
+.telemetry-display {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.telemetry-summary {
+    display: flex;
+    gap: 16px;
+    padding: 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+}
+
+.telemetry-agents {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.agent-metrics {
+    padding: 8px;
+    background-color: var(--bg-tertiary);
+    border-radius: 4px;
+    border-left: 3px solid var(--accent-blue);
+}
+
+.agent-name {
+    font-weight: 600;
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.agent-stats {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* RL Responsive */
+@media (max-width: 1200px) {
+    .rl-main-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 900px) {
+    .rl-main-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .rl-metrics-inline {
+        margin-left: 0;
+        width: 100%;
+        justify-content: space-around;
+    }
+}

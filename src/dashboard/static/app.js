@@ -844,6 +844,11 @@ class Dashboard {
                 this.charts.accuracy.update('none');
             }
         }
+
+        // Update NN dashboard if available
+        if (window.nnDashboard && data.nn) {
+            window.nnDashboard.update(data.nn);
+        }
     }
 
     // Load initial history if available
@@ -912,13 +917,16 @@ class Dashboard {
         if (tabId === 'training') {
             this.loadCheckpoints();
             this.loadGpuInfo();
+        } else if (tabId === 'nn') {
+            // Neural Net tab - uses separate module
+            window.nnDashboard?.init?.();
         } else if (tabId === 'models') {
             this.loadVersions();
             this.loadArena();
         } else if (tabId === 'scraper') {
-            this.loadScraperStatus();
-            this.loadScraperDbStats();
-            this.startScraperPolling();
+            // Scraper tab - uses separate module
+            window.scraperDashboard?.init?.();
+            window.scraperDashboard?.startPolling?.();
         } else if (tabId === 'data') {
             if (!this.dataInitialized) {
                 this.initAnalytics();
@@ -928,26 +936,22 @@ class Dashboard {
             this.loadExplorationStats();
             this.loadDateDistribution();
         } else if (tabId === 'rl') {
-            if (!this.rlInitialized) {
-                this.initRL();
-                this.rlInitialized = true;
-            }
-            this.loadRLResults();
+            // RL tab - uses separate module
+            window.rlDashboard?.init?.();
+            window.rlDashboard?.loadResults?.();
         } else if (tabId === 'builds') {
             this.loadMetadataStatus();
             this.loadEquipmentData();
         }
 
         // Stop scraper polling when leaving scraper tab
-        if (tabId !== 'scraper' && this.scraperPollInterval) {
-            clearInterval(this.scraperPollInterval);
-            this.scraperPollInterval = null;
+        if (tabId !== 'scraper') {
+            window.scraperDashboard?.stopPolling?.();
         }
 
         // Stop RL polling when leaving RL tab
-        if (tabId !== 'rl' && this.rlPollInterval) {
-            clearInterval(this.rlPollInterval);
-            this.rlPollInterval = null;
+        if (tabId !== 'rl') {
+            window.rlDashboard?.stopPolling?.();
         }
     }
 

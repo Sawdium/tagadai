@@ -193,7 +193,16 @@ class MetricsCollector:
     def get_metrics(self) -> dict:
         """Get current metrics as dict."""
         with self._lock:
-            return self.metrics.to_dict()
+            metrics = self.metrics.to_dict()
+
+        # Include NN metrics if available
+        try:
+            from .managers.nn_training import nn_training_manager
+            metrics["nn"] = nn_training_manager.get_state()
+        except ImportError:
+            pass
+
+        return metrics
 
     def get_history(self) -> list[dict]:
         """Get training history as list of dicts."""
