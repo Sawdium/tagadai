@@ -1,0 +1,76 @@
+// Neural Network Forward Pass
+// Computes score for a (state, action) feature pair
+
+include('nnWeights')
+
+// ReLU activation
+function relu(x) {
+    if (x > 0) return x
+    return 0
+}
+
+// Forward pass through the network
+// features: array of floats (state + action features concatenated)
+// Returns: score (higher = better action)
+function nnForward(features) {
+    var inputSize = count(features)
+
+    // Layer 1: input -> hidden1
+    var h1Size = count(b1)
+    var h1 = []
+    for (var i = 0; i < h1Size; i++) {
+        var sum = b1[i]
+        for (var j = 0; j < inputSize; j++) {
+            sum += features[j] * W1[i][j]
+        }
+        push(h1, relu(sum))
+    }
+
+    // Layer 2: hidden1 -> hidden2
+    var h2Size = count(b2)
+    var h2 = []
+    for (var i = 0; i < h2Size; i++) {
+        var sum = b2[i]
+        for (var j = 0; j < h1Size; j++) {
+            sum += h1[j] * W2[i][j]
+        }
+        push(h2, relu(sum))
+    }
+
+    // Output: hidden2 -> score
+    var score = b3[0]
+    for (var j = 0; j < h2Size; j++) {
+        score += h2[j] * W3[0][j]
+    }
+
+    return score
+}
+
+// Score multiple actions and return index of best
+// stateFeatures: array of state features
+// actionFeaturesList: array of action feature arrays
+// Returns: index of highest-scoring action
+function nnSelectBest(stateFeatures, actionFeaturesList) {
+    var bestIdx = 0
+    var bestScore = -999999
+
+    var numActions = count(actionFeaturesList)
+    for (var i = 0; i < numActions; i++) {
+        // Concatenate state and action features
+        var features = []
+        for (var j in stateFeatures) {
+            push(features, stateFeatures[j])
+        }
+        for (var j in actionFeaturesList[i]) {
+            push(features, actionFeaturesList[i][j])
+        }
+
+        var score = nnForward(features)
+        if (score > bestScore) {
+            bestScore = score
+            bestIdx = i
+        }
+    }
+
+    return bestIdx
+}

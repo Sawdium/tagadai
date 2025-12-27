@@ -1,0 +1,148 @@
+// Feature extraction for Neural Network
+// Extracts state and action features from fight state
+
+// Extract state features (context)
+// Returns: array of 23 floats
+function extractStateFeatures(selfEntity, enemyEntity, turn, dangerCurrent, dangerBest) {
+    var selfLife = getLife(selfEntity)
+    var selfTotalLife = getTotalLife(selfEntity)
+    var selfTP = getTP(selfEntity)
+    var selfMP = getMP(selfEntity)
+    var selfStr = getStrength(selfEntity)
+    var selfMgc = getMagic(selfEntity)
+    var selfAgi = getAgility(selfEntity)
+    var selfRst = getResistance(selfEntity)
+
+    var enemyLife = getLife(enemyEntity)
+    var enemyTotalLife = getTotalLife(enemyEntity)
+    var enemyTP = getTP(enemyEntity)
+    var enemyMP = getMP(enemyEntity)
+    var enemyStr = getStrength(enemyEntity)
+    var enemyMgc = getMagic(enemyEntity)
+
+    var distance = getCellDistance(getCell(selfEntity), getCell(enemyEntity))
+
+    // Normalize values
+    var features = [
+        selfLife / max(selfTotalLife, 1),           // self_hp_ratio
+        selfTP / 20.0,                               // self_tp_norm
+        selfMP / 10.0,                               // self_mp_norm
+        selfStr / 500.0,                             // self_str_norm
+        selfMgc / 500.0,                             // self_mgc_norm
+        selfAgi / 500.0,                             // self_agi_norm
+        selfRst / 500.0,                             // self_rst_norm
+        enemyLife / max(enemyTotalLife, 1),         // enemy_hp_ratio
+        enemyTP / 20.0,                              // enemy_tp_norm
+        enemyMP / 10.0,                              // enemy_mp_norm
+        enemyStr / 500.0,                            // enemy_str_norm
+        enemyMgc / 500.0,                            // enemy_mgc_norm
+        distance / 20.0,                             // distance_norm
+        dangerCurrent / max(selfTotalLife, 1),      // danger_current_norm
+        dangerBest / max(selfTotalLife, 1),         // danger_best_norm
+        dangerBest > 0 ? dangerCurrent / dangerBest : 1.0,  // danger_ratio
+        0.0,  // self_has_poison (TODO: implement)
+        0.0,  // self_has_shield (TODO: implement)
+        0.0,  // enemy_has_poison (TODO: implement)
+        0.0,  // enemy_has_shield (TODO: implement)
+        turn / 64.0,                                 // turn_norm
+        0.0,  // can_kill_this_turn (TODO: implement)
+        dangerCurrent >= selfLife ? 1.0 : 0.0       // at_risk
+    ]
+
+    return features
+}
+
+// Extract action features for a single action
+// Returns: array of 34 floats
+function extractActionFeatures(
+    actionType,      // 'weapon', 'chip', 'move', 'end'
+    itemId,          // weapon or chip ID (null for move/end)
+    selfEntity,
+    enemyEntity,
+    damageDealt,
+    healDone,
+    shieldAdded,
+    poisonApplied,
+    tpCost,
+    mpCost,
+    dangerAfter,
+    dangerBefore,
+    cellAfter
+) {
+    var selfTP = getTP(selfEntity)
+    var selfMP = getMP(selfEntity)
+    var selfLife = getLife(selfEntity)
+    var selfTotalLife = getTotalLife(selfEntity)
+    var enemyLife = getLife(enemyEntity)
+    var enemyTotalLife = getTotalLife(enemyEntity)
+
+    // Item property features (20 floats)
+    var itemFeatures = getItemFeatures(actionType, itemId)
+
+    // Consequence features (14 floats)
+    var distBefore = getCellDistance(getCell(selfEntity), getCell(enemyEntity))
+    var distAfter = getCellDistance(cellAfter, getCell(enemyEntity))
+
+    var conseqFeatures = [
+        damageDealt / max(enemyTotalLife, 1),           // damage_dealt_norm
+        enemyLife > 0 ? damageDealt / enemyLife : 0,    // damage_dealt_ratio
+        healDone / max(selfTotalLife, 1),               // heal_done_norm
+        shieldAdded / max(selfTotalLife, 1),            // shield_added_norm
+        poisonApplied / max(enemyTotalLife, 1),         // poison_applied_norm
+        selfTP > 0 ? tpCost / selfTP : 0,               // tp_cost_ratio
+        selfMP > 0 ? mpCost / selfMP : 0,               // mp_cost_ratio
+        dangerAfter / max(selfTotalLife, 1),            // danger_after_norm
+        (dangerAfter - dangerBefore) / max(selfTotalLife, 1),  // danger_delta_norm
+        distAfter / 20.0,                               // distance_after_norm
+        (distAfter - distBefore) / 20.0,                // distance_delta_norm
+        damageDealt >= enemyLife ? 1.0 : 0.0,           // is_kill
+        cellAfter == getCell(selfEntity) ? 1.0 : 0.0,   // is_self_target
+        dangerAfter >= selfLife ? 1.0 : 0.0             // will_die_after
+    ]
+
+    // Concatenate
+    var features = []
+    for (var f in itemFeatures) push(features, itemFeatures[f])
+    for (var f in conseqFeatures) push(features, conseqFeatures[f])
+
+    return features
+}
+
+// Get item property features (20 floats)
+function getItemFeatures(actionType, itemId) {
+    // Item type flags
+    var isWeapon = actionType == 'weapon' ? 1.0 : 0.0
+    var isChip = actionType == 'chip' ? 1.0 : 0.0
+    var isMove = actionType == 'move' ? 1.0 : 0.0
+    var isEnd = actionType == 'end' ? 1.0 : 0.0
+
+    // Effect type flags (simplified - would need item lookup table)
+    var isDamage = (actionType == 'weapon') ? 1.0 : 0.0
+    var isHeal = 0.0
+    var isShield = 0.0
+    var isBuff = 0.0
+    var isPoison = 0.0
+    var isDebuff = 0.0
+    var isSummon = 0.0
+    var isUtility = 0.0
+    var isDmgReturn = 0.0
+
+    // Damage type
+    var isPhysical = (actionType == 'weapon') ? 1.0 : 0.0
+    var isMagic = (actionType == 'chip') ? 1.0 : 0.0
+
+    // Costs and ranges (normalized)
+    var tpCostNorm = 0.15  // Default ~3/20
+    var minRangeNorm = 0.08  // Default 1/12
+    var maxRangeNorm = 0.5   // Default 6/12
+    var hasAoe = 0.0
+    var levelReqNorm = 0.1   // Default low level
+
+    return [
+        isWeapon, isChip, isMove, isEnd,
+        isDamage, isHeal, isShield, isBuff, isPoison, isDebuff, isSummon, isUtility, isDmgReturn,
+        isPhysical, isMagic,
+        tpCostNorm, minRangeNorm, maxRangeNorm,
+        hasAoe, levelReqNorm
+    ]
+}

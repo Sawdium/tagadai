@@ -1,0 +1,255 @@
+// TagadaNN - Neural Network based AI for LeekWars
+// A proof-of-concept AI that uses a trained neural network
+// to select actions based on learned patterns from scraped fights.
+
+include('nnWeights')
+include('nnForward')
+include('nnFeatures')
+
+// Global state
+global enemy = null
+global turnNum = 0
+global currentWeapon = null
+
+// Main entry point
+turnNum++
+
+// Find enemy
+enemy = getNearestEnemy()
+if (enemy != null) {
+    // Keep acting until we can't do anything useful
+    var actionsThisTurn = 0
+    var maxActions = 20  // Safety limit
+
+    while (actionsThisTurn < maxActions and getTP() > 0) {
+        var action = selectBestAction()
+        if (action == null) break
+
+        var success = executeAction(action)
+        if (!success) break
+
+        actionsThisTurn++
+    }
+}
+
+// Action representation
+// action = [type, itemId, targetCell]
+// type: 'move', 'weapon', 'chip', 'end'
+
+function selectBestAction() {
+    var candidates = generateCandidates()
+    if (count(candidates) == 0) return null
+
+    // Extract state features (shared)
+    var dangerCur = estimateDanger(getCell())
+    var dangerBest = dangerCur * 0.3
+    var stateFeatures = extractStateFeatures(
+        getEntity(),
+        enemy,
+        turnNum,
+        dangerCur,
+        dangerBest
+    )
+
+    // Score each candidate
+    var bestScore = -999999.0
+    var bestAction = null
+    var bestDistAfter = 999
+    var enemyCell = getCell(enemy)
+    var myCell = getCell()
+
+    debug("=== Scoring candidates ===")
+    for (var action in candidates) {
+        var actionFeatures = extractActionFeaturesForCandidate(action)
+
+        // Concatenate features
+        var features = []
+        for (var f in stateFeatures) push(features, f)
+        for (var f in actionFeatures) push(features, f)
+
+        var score = nnForward(features)
+
+        // Calculate distance after this action
+        var distAfter = getCellDistance(myCell, enemyCell)
+        if (action[0] == 'move') {
+            // Estimate: moving 3 cells closer (MP worth)
+            distAfter = max(1, distAfter - getMP())
+        }
+
+        debug("  " + action[0] + " -> score=" + score + " distAfter=" + distAfter)
+
+        // Primary: best score wins
+        // Tiebreaker: when scores equal, prefer closer to enemy
+        if (score > bestScore) {
+            bestScore = score
+            bestAction = action
+            bestDistAfter = distAfter
+        } else if (score == bestScore && distAfter < bestDistAfter) {
+            // Same score but gets us closer - prefer this
+            bestAction = action
+            bestDistAfter = distAfter
+            debug("  ^ tiebreaker: closer to enemy")
+        }
+    }
+
+    debug("Best: " + bestAction[0] + " score=" + bestScore + " dist=" + bestDistAfter)
+    return bestAction
+}
+
+function generateCandidates() {
+    var candidates = []
+    var tp = getTP()
+    var mp = getMP()
+    var myCell = getCell()
+    var enemyCell = getCell(enemy)
+    var dist = getCellDistance(myCell, enemyCell)
+
+    debug("=== generateCandidates ===")
+    debug("TP=" + tp + " MP=" + mp + " dist=" + dist)
+
+    // Move toward enemy (if we have MP)
+    if (mp > 0) {
+        if (dist > 1) {
+            push(candidates, ['move', null, enemyCell])
+            debug("+ move candidate")
+        }
+    }
+
+    // Weapon candidates
+    var weapons = getWeapons()
+    debug("weapons count: " + count(weapons))
+    for (var weapon in weapons) {
+        var cost = getWeaponCost(weapon)
+        var minR = getWeaponMinRange(weapon)
+        var maxR = getWeaponMaxRange(weapon)
+        debug("  weapon " + weapon + " cost=" + cost + " range=" + minR + "-" + maxR)
+        if (tp >= cost) {
+            if (dist >= minR and dist <= maxR) {
+                push(candidates, ['weapon', weapon, enemyCell])
+                debug("  + weapon candidate added")
+            } else {
+                debug("  - out of range (dist=" + dist + ")")
+            }
+        } else {
+            debug("  - not enough TP")
+        }
+    }
+
+    // Chip candidates
+    var chips = getChips()
+    debug("chips count: " + count(chips))
+    for (var chip in chips) {
+        var cost = getChipCost(chip)
+        var minR = getChipMinRange(chip)
+        var maxR = getChipMaxRange(chip)
+        var cd = getCooldown(chip)
+        debug("  chip " + chip + " cost=" + cost + " range=" + minR + "-" + maxR + " cd=" + cd)
+        if (tp >= cost and cd == 0) {
+            if (dist >= minR and dist <= maxR) {
+                push(candidates, ['chip', chip, enemyCell])
+                debug("  + chip candidate added")
+            } else {
+                debug("  - out of range")
+            }
+        }
+    }
+
+    // End turn is always an option
+    push(candidates, ['end', null, 0])
+
+    debug("Total candidates: " + count(candidates))
+
+    return candidates
+}
+
+function executeAction(action) {
+    var actionType = action[0]
+    var itemId = action[1]
+    var targetCell = action[2]
+
+    debug("executeAction: " + actionType + " item=" + itemId)
+
+    if (actionType == 'move') {
+        var moved = moveToward(enemy)
+        debug("  moved " + moved + " cells")
+        return moved > 0
+    } else if (actionType == 'weapon') {
+        if (currentWeapon != itemId) {
+            debug("  setWeapon(" + itemId + ")")
+            setWeapon(itemId)
+            currentWeapon = itemId
+        }
+        var result = useWeapon(enemy)
+        debug("  useWeapon result=" + result + " (SUCCESS=" + USE_SUCCESS + ")")
+        return result == USE_SUCCESS
+    } else if (actionType == 'chip') {
+        var result = useChip(itemId, enemy)
+        debug("  useChip result=" + result)
+        return result == USE_SUCCESS
+    } else if (actionType == 'end') {
+        debug("  ending turn")
+        return false  // Signal to stop acting
+    }
+
+    return false
+}
+
+function extractActionFeaturesForCandidate(action) {
+    var actionType = action[0]
+    var itemId = action[1]
+    var targetCell = action[2]
+
+    // Estimate consequences
+    var damage = 0.0
+    var heal = 0.0
+    var shield = 0.0
+    var poison = 0.0
+    var tpCost = 0
+    var mpCost = 0
+    var cellAfter = getCell()
+
+    if (actionType == 'weapon') {
+        damage = getStrength() * 0.5
+        tpCost = getWeaponCost(itemId)
+    } else if (actionType == 'chip') {
+        tpCost = getChipCost(itemId)
+        damage = getMagic() * 0.3
+    } else if (actionType == 'move') {
+        cellAfter = targetCell
+        mpCost = 1
+    }
+
+    var dangerBefore = estimateDanger(getCell())
+    var dangerAfter = estimateDanger(cellAfter)
+
+    return extractActionFeatures(
+        actionType,
+        itemId,
+        getEntity(),
+        enemy,
+        damage,
+        heal,
+        shield,
+        poison,
+        tpCost,
+        mpCost,
+        dangerAfter,
+        dangerBefore,
+        cellAfter
+    )
+}
+
+// Simplified danger estimation
+function estimateDanger(cell) {
+    if (enemy == null) return 0.0
+
+    var dist = getCellDistance(cell, getCell(enemy))
+    var enemyStr = getStrength(enemy)
+    var enemyMgc = getMagic(enemy)
+
+    // Rough estimate: closer = more danger
+    if (dist <= 1) return (enemyStr + enemyMgc) * 0.8
+    if (dist <= 3) return (enemyStr + enemyMgc) * 0.5
+    if (dist <= 6) return (enemyStr + enemyMgc) * 0.3
+    return (enemyStr + enemyMgc) * 0.1
+}
