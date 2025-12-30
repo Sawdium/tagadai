@@ -161,6 +161,22 @@ python -m src.tools.aisync new <name>            # Create new AI file
 python -m src.tools.aisync rename <ai_id> <name> # Rename AI file
 ```
 
+**CRITICAL: Upload Safety Guidelines**
+
+AI file IDs are sequential integers that are easy to confuse (e.g., Cell=452960, Entity=452961, EntityEffect=452962). To avoid uploading to the wrong file:
+
+1. **Use full list output, not grep**: Run `aisync list` and visually confirm the ID-to-name mapping. Grepping can match partial names incorrectly.
+
+2. **Verify before upload**: The local file path should match the remote file name:
+   ```bash
+   # Good: path ends with 'Cell', uploading to 'Cell'
+   python -m src.tools.aisync put 452960 tagadalive/Model/GameObject/Cell
+   ```
+
+3. **Check upload confirmation**: The tool outputs "AI 'Name' is VALID" - verify the name matches your intent.
+
+4. **After bulk edits, verify all files**: If you edited multiple files, run a test fight immediately to catch any upload mistakes.
+
 ### Test Runner
 ```bash
 python -m src.tools.testrunner                   # Run all valid tests
