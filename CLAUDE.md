@@ -86,6 +86,17 @@ Combat AI written in **LeekScript v4** (~30 core files, modular architecture). T
 - **Type annotations are FREE**: Empirically tested - zero runtime operation cost
 - Cell 1312 (`Cell.SELF_CAST_ID`) is sentinel for self-cast actions (outside valid range 0-612)
 
+**CRITICAL - Operation Limits**:
+LeekWars enforces strict operation limits per turn. Every loop iteration, function call, and computation counts against this budget. When proposing solutions for tagadalive code:
+
+1. **Think complexity first**: Before implementing any solution, analyze its computational complexity (O(n), O(n²), etc.) and consider the worst-case scenario
+2. **Filter early**: Apply filters at the earliest possible point to reduce the dataset size before expensive operations (e.g., filter invincible enemies at action creation, not during scoring)
+3. **Avoid redundant work**: Cache computed values, use lookup maps instead of repeated searches
+4. **Minimize nested loops**: Each nested loop multiplies complexity - flatten when possible or use early exits
+5. **Prefer O(1) over O(n)**: Use Maps for lookups instead of array searches when the same lookup happens multiple times
+
+Example: Instead of checking `isInvincible` during every damage calculation in Consequences, filter invincible enemies once during action creation in MapAction - saves thousands of operations.
+
 **TODO.md**: Tracks static analysis issues and improvements
 
 ## Common Module
