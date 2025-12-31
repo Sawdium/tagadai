@@ -41,6 +41,7 @@ tagadai/
 │   ├── Controlers/           # Fight logic, pathfinding, danger maps
 │   ├── Services/             # Damage calc, targeting, benchmarks
 │   ├── TESTS/                # Standalone unit tests (simpleTest, etc.)
+│   ├── tampermonkey/         # Browser userscripts for fight report analysis
 │   ├── TODO.md               # Static analysis issues tracker
 │   ├── main                  # Entry point
 │   ├── auto                  # Include aggregator (includes all AI modules)
@@ -98,6 +99,26 @@ LeekWars enforces strict operation limits per turn. Every loop iteration, functi
 Example: Instead of checking `isInvincible` during every damage calculation in Consequences, filter invincible enemies once during action creation in MapAction - saves thousands of operations.
 
 **TODO.md**: Tracks static analysis issues and improvements
+
+### tagadalive/tampermonkey/
+Browser userscripts for analyzing fight reports. Provides real-time visualization of AI debug output.
+
+**Purpose**: When viewing a fight report on LeekWars, these scripts display a panel showing:
+- Turn-by-turn MCTS stats (iterations, nodes, positions, best score)
+- Performance profiler (operation counts per function, grouped by category)
+- Combo analysis (top-scored action sequences with score breakdown)
+- Resource tracking (HP, TP, MP, cell position)
+- Error detection (AI crashes with stack traces)
+
+**Architecture**: 6 modular Tampermonkey scripts that load in sequence:
+- `lwa-core.user.js` - Shared state and helpers
+- `lwa-styles.user.js` - CSS styling
+- `lwa-parser.user.js` - Log parsing
+- `lwa-ui.user.js` - UI rendering
+- `lwa-charts.user.js` - Chart.js visualizations
+- `lwa-main.user.js` - Initialization
+
+**Documentation**: See `tagadalive/tampermonkey/README.md` for installation and usage details.
 
 ## Common Module
 
