@@ -37,7 +37,7 @@ tagadai/
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # ACTIVE AI DEVELOPMENT - LeekScript v4 combat AI
 │   ├── AI/                   # Decision engine & scoring
-│   │   ├── Combos/           # Search algorithms (MCTS, PTS, BeamSearch, Hybrid)
+│   │   ├── Algorithms/       # Search algorithms (MCTS, PTS, BeamSearch, Hybrid)
 │   │   ├── Scoring           # Score calculation façade
 │   │   ├── ScoringConfig     # ML-tunable constants
 │   │   └── AI                # Mode dispatcher
@@ -73,7 +73,7 @@ Combat AI written in **LeekScript v4** (~30 core files, modular architecture). T
 **Core files**:
 - `main` - Entry point, algorithm mode selection (see configuration box)
 - `AI/AI` - Mode dispatcher and utilities
-- `AI/Combos/` - Search algorithms:
+- `AI/Algorithms/` - Search algorithms:
   - `PTS` - Priority Target Simulation (greedy, ~50k ops)
   - `MCTS` - Monte Carlo Tree Search with UCB1 (~300k ops)
   - `BeamSearch` - Multi-path beam search (~150k ops)

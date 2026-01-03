@@ -746,8 +746,8 @@ python -m src.tools.aisync put <main_id> tagadalive/main
 
 ```
 AI/
-├── AI                    # Façade principale, setMode(), getCombo()
-├── Combos/
+├── AI                    # Façade principale, getCombo()
+├── Algorithms/
 │   ├── MCTS              # Monte Carlo Tree Search
 │   ├── PTS               # Priority Target Simulation
 │   ├── BeamSearch        # Beam Search
