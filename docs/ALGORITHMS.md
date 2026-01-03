@@ -317,13 +317,32 @@ BeamSearch maintient un **faisceau** (beam) de K meilleures séquences partielle
 
    Si candidates vide : break
 
-   Trier candidates par score décroissant
+   Trier candidates par actionScore décroissant
    beam = top-K(candidates)  // Garder les K meilleurs
 
-3. EXTRACTION
-   Meilleur combo = beam[0]  // Premier = meilleur score
-   Ajouter position finale
+3. ÉVALUATION POSITION FINALE
+   Pour chaque candidat dans beam final :
+     position = findBestPosition(cellule_courante, MP_restants, conséquences)
+     totalScore = actionScore + position.score
+
+   Meilleur combo = candidat avec meilleur totalScore
 ```
+
+#### Stratégie d'évaluation de position
+
+La position n'est évaluée qu'à la **fin** du combo, pas pendant la recherche :
+
+- **Pendant le beam** : sélection par `actionScore` uniquement (performance)
+- **Beam final** : évaluation de position pour les ~15 candidats survivants
+- **Sélection finale** : `totalScore = actionScore + positionScore`
+
+**Pourquoi ?** Évaluer la position à chaque étape intermédiaire serait trop coûteux
+(~700 appels à `findBestPosition` vs ~15). La position intermédiaire n'a pas de sens
+car le combo n'est pas terminé.
+
+**Coût de findBestPosition** dépend du MP restant :
+- Combo agressif (0 MP) → 1 cellule → quasi gratuit
+- Combo conservateur (5+ MP) → 15+ cellules → plus coûteux
 
 #### Structure BeamState
 
@@ -334,7 +353,7 @@ BeamState
 ├── remainingTP/MP: integer
 ├── weaponInHand: Item?
 ├── usageCounts: Map<Item, int>  // Utilisations par item
-├── score: real                  // Score cumulé
+├── actionScore: real            // Score cumulé des actions
 └── startCell: Cell
 ```
 
