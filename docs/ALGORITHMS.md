@@ -10,6 +10,7 @@ Ce document décrit en détail les algorithmes de recherche de combos implément
    - [PTS - Priority Target Simulation](#pts---priority-target-simulation)
    - [MCTS - Monte Carlo Tree Search](#mcts---monte-carlo-tree-search)
    - [BeamSearch - Recherche en faisceau](#beamsearch---recherche-en-faisceau)
+   - [UnifiedMCTS - MCTS unifié](#unifiedmcts---mcts-unifié)
 4. [Modes hybrides](#modes-hybrides)
    - [HYBRID](#hybrid)
    - [HYBRID_GUIDED](#hybrid_guided)
@@ -23,7 +24,7 @@ Ce document décrit en détail les algorithmes de recherche de combos implément
 
 ## Vue d'ensemble
 
-L'IA dispose de **6 modes** de recherche de combos, configurables via `AI.mode` :
+L'IA dispose de **7 modes** de recherche de combos, configurables via `AI.mode` :
 
 | Mode | Constante | Description courte |
 |------|-----------|-------------------|
@@ -33,8 +34,9 @@ L'IA dispose de **6 modes** de recherche de combos, configurables via `AI.mode` 
 | HYBRID | `MODE_HYBRID = 3` | PTS seed → MCTS sur 1 cellule |
 | HYBRID_GUIDED | `MODE_HYBRID_GUIDED = 4` | PTS guide l'ordre des cellules MCTS |
 | HYBRID_BEAM | `MODE_HYBRID_BEAM = 5` | PTS guide l'ordre des cellules Beam |
+| UNIFIED_MCTS | `MODE_UNIFIED_MCTS = 6` | Arbre unique avec cellules au premier niveau |
 
-**Mode par défaut** : `HYBRID_GUIDED` (meilleur compromis qualité/performance)
+**Mode par défaut** : `UNIFIED_MCTS` (arbre unifié, UCB1 alloue naturellement les itérations)
 
 ---
 
@@ -140,7 +142,7 @@ PTS itère **cible par cible** au lieu de cellule par cellule. Pour chaque paire
 | Avantage | Explication |
 |----------|-------------|
 | **Très rapide** | Single-pass greedy, pas d'exploration |
-| **Faible consommation ops** | ~50k-100k ops typiquement |
+| **Faible consommation ops** | Économique en opérations |
 | **Prévisible** | Déterministe, même résultat à chaque fois |
 | **Scale avec cibles** | O(cibles) au lieu de O(cellules) |
 
@@ -262,7 +264,7 @@ UCB(nœud) = exploitation + exploration
 
 | Inconvénient | Explication |
 |--------------|-------------|
-| **Coût élevé** | ~200k-400k ops typiquement |
+| **Coût élevé** | Consomme beaucoup d'opérations |
 | **Structure arbre** | Mémoire et overhead de création de nœuds |
 | **Rollouts stochastiques** | Variance dans l'évaluation |
 | **Paramètres sensibles** | C, MAX_ITERATIONS à tuner |
@@ -410,6 +412,94 @@ Depth 2: étendre chaque candidat
 Depth 3: continuer...
 
 Résultat final : Cure → Laser → ... (meilleur score cumulé)
+```
+
+---
+
+### UnifiedMCTS - MCTS unifié
+
+**Principe** : Un seul arbre avec les cellules comme enfants de premier niveau. UCB1 alloue naturellement les itérations aux cellules prometteuses.
+
+Contrairement au MCTS standard qui exécute des recherches séparées par cellule, UnifiedMCTS intègre la sélection de cellule dans l'arbre lui-même.
+
+#### Structure de l'arbre
+
+```
+Root
+├── CellNode(cell1)           ← UCB1 choisit quelle cellule explorer
+│   ├── ActionNode(Laser) → ActionNode(Pistol) → ...
+│   └── ActionNode(Cure) → ...
+├── CellNode(cell2)
+│   └── ActionNode(Flash) → ...
+└── CellNode(current)         ← Rester sur place
+    └── ActionNode(Heal) → ...
+```
+
+#### Algorithme
+
+```
+1. PTS Baseline
+   - Exécuter PTS.buildCombo() → ptsCombo, ptsScore
+   - Si budget épuisé → retourner ptsCombo
+
+2. Construction de l'arbre
+   - Root avec untriedCells = cellules accessibles ayant des actions
+
+3. PTS Seeding (optionnel, activé par défaut)
+   - Pour chaque cellule avec un score PTS > 0 :
+     - Créer CellNode avec 3 visites virtuelles
+     - totalValue = ptsScore × 3
+
+4. Boucle MCTS (tant que budget ops disponible)
+   a. SELECT : Descendre avec UCB1
+      - Au root : choisir CellNode (UCB1 ou cellule non-essayée)
+      - Aux nœuds action : choisir ActionNode (UCB1 ou action non-essayée)
+
+   b. EXPAND : Créer nouveau nœud
+      - Si cellule non-essayée → créer CellNode
+      - Si action non-essayée → créer ActionNode
+
+   c. ROLLOUT : Simulation greedy (max 3 étapes)
+      - Depuis le nœud, sélectionner les meilleures actions greedily
+      - Score final = score actions + danger position finale
+
+   d. BACKPROPAGATE : Remonter le score
+      - Incrémenter visits, ajouter au totalValue
+      - Jusqu'à la racine
+
+5. Extraction du combo
+   - Suivre le chemin le plus visité (most-visited)
+   - Ajouter la meilleure position finale
+
+6. Résultat : max(mctsScore, ptsScore)
+   - Retourne le meilleur combo entre MCTS et PTS
+```
+
+#### Avantages
+
+| Avantage | Explication |
+|----------|-------------|
+| **Allocation naturelle** | UCB1 concentre les itérations sur les cellules prometteuses |
+| **PTS fallback** | Garantie d'un bon résultat minimum via PTS baseline |
+| **PTS seeding** | Démarrage informé, pas d'exploration aveugle |
+| **Exploration adaptative** | Les cellules peu prometteuses sont naturellement abandonnées |
+
+#### Inconvénients
+
+| Inconvénient | Explication |
+|--------------|-------------|
+| **Coût PTS initial** | Doit exécuter PTS avant MCTS |
+| **Arbre plus large** | Plus de nœuds au premier niveau (toutes les cellules) |
+| **Overhead mémoire** | Structure d'arbre plus profonde |
+
+#### Paramètres clés
+
+```leekscript
+UnifiedMCTS.EXPLORATION_CONSTANT = 1.414  // Facteur UCB1 (√2)
+UnifiedMCTS.MAX_ITERATIONS = 10000        // Limite d'itérations (budget ops = vraie limite)
+UnifiedMCTS.MAX_ACTIONS_PER_CELL = 8      // Pruning des actions par cellule
+UnifiedMCTS.SAFETY_BUFFER = 200000        // Réserve d'ops pour l'exécution
+UnifiedMCTS.USE_PTS_SEEDING = true        // Activer le seeding PTS
 ```
 
 ---
@@ -571,7 +661,7 @@ Qualité
                              │
               ┌──────────────┼──────────────┐
               ▼              ▼              ▼
-         < 150k ops    150k-300k ops    > 300k ops
+           Faible       Modéré         Élevé
               │              │              │
               ▼              ▼              ▼
            ┌─────┐      ┌────────┐      ┌──────┐
@@ -707,28 +797,30 @@ BeamSearch.MAX_DEPTH = 4
 
 ### Par qualité de combo (meilleur en haut)
 
-1. **MCTS** ★★★★★ - Exploration UCB1, trouve les synergies complexes
-2. **HYBRID_GUIDED** ★★★★½ - MCTS complet avec fallback PTS
-3. **BeamSearch** ★★★★☆ - Multi-path efficace
-4. **HYBRID_BEAM** ★★★★☆ - Beam avec guidance PTS
-5. **HYBRID** ★★★½☆ - MCTS limité à 1 cellule
-6. **PTS** ★★★☆☆ - Greedy, rate les synergies
+1. **UNIFIED_MCTS** ★★★★★ - Arbre unifié, UCB1 alloue aux cellules prometteuses
+2. **MCTS** ★★★★★ - Exploration UCB1, trouve les synergies complexes
+3. **HYBRID_GUIDED** ★★★★½ - MCTS complet avec fallback PTS
+4. **BeamSearch** ★★★★☆ - Multi-path efficace
+5. **HYBRID_BEAM** ★★★★☆ - Beam avec guidance PTS
+6. **HYBRID** ★★★½☆ - MCTS limité à 1 cellule
+7. **PTS** ★★★☆☆ - Greedy, rate les synergies
 
 ### Par efficacité (ops utilisées)
 
-1. **PTS** ★★★★★ - ~50k-100k ops
-2. **BeamSearch** ★★★★☆ - ~100k-200k ops
-3. **HYBRID** ★★★½☆ - ~150k-250k ops
-4. **HYBRID_BEAM** ★★★☆☆ - ~150k-300k ops
-5. **HYBRID_GUIDED** ★★½☆☆ - ~200k-400k ops
-6. **MCTS** ★★☆☆☆ - ~300k-500k ops
+1. **PTS** ★★★★★ - Très économique
+2. **BeamSearch** ★★★★☆ - Économique
+3. **HYBRID** ★★★½☆ - Modéré
+4. **UNIFIED_MCTS** ★★★☆☆ - Modéré (allocation dynamique)
+5. **HYBRID_BEAM** ★★★☆☆ - Modéré à élevé
+6. **HYBRID_GUIDED** ★★½☆☆ - Élevé
+7. **MCTS** ★★☆☆☆ - Très élevé
 
 ### Recommandation globale
 
 | Usage | Mode | Justification |
 |-------|------|---------------|
-| **Production** | `HYBRID_GUIDED` | Meilleur compromis qualité/fiabilité |
-| **Alternative** | `HYBRID_BEAM` | Si HYBRID_GUIDED timeout souvent |
+| **Production** | `UNIFIED_MCTS` | Arbre unifié, allocation naturelle par UCB1 |
+| **Alternative** | `HYBRID_GUIDED` | Si UNIFIED_MCTS pose problème |
 | **Expérimentation** | `MODE_MCTS` ou `MODE_BEAM` | Pour comparer les algos purs |
 | **Debug/Tests** | `MODE_PTS` | Rapide et reproductible |
 
@@ -742,14 +834,15 @@ Pour changer l'algorithme, modifier dans `main` la ligne `AI.mode = ...` :
 // ╔══════════════════════════════════════════════════════════════════════════╗
 // ║                         ALGORITHM CONFIGURATION                          ║
 // ╠══════════════════════════════════════════════════════════════════════════╣
-// ║  MODE_PTS           Fast greedy, target-first (~50k ops)                 ║
-// ║  MODE_MCTS          Full tree search (~300k ops)                         ║
-// ║  MODE_BEAM          Multi-path beam search (~150k ops)                   ║
-// ║  MODE_HYBRID        PTS seeds MCTS on 1 cell (~150k ops)                 ║
-// ║  MODE_HYBRID_GUIDED PTS guides MCTS cell order (~250k ops) [RECOMMENDED] ║
-// ║  MODE_HYBRID_BEAM   PTS guides BeamSearch (~200k ops)                    ║
+// ║  MODE_PTS           Fast greedy, target-first                            ║
+// ║  MODE_MCTS          Full tree search                                     ║
+// ║  MODE_BEAM          Multi-path beam search                               ║
+// ║  MODE_HYBRID        PTS seeds MCTS on 1 cell                             ║
+// ║  MODE_HYBRID_GUIDED PTS guides MCTS cell order                           ║
+// ║  MODE_HYBRID_BEAM   PTS guides BeamSearch                                ║
+// ║  MODE_UNIFIED_MCTS  Single tree with cells as first-level [RECOMMENDED]  ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
-AI.mode = AI.MODE_HYBRID_GUIDED
+AI.mode = AI.MODE_UNIFIED_MCTS
 ```
 
 **Note** : On utilise une assignation directe (`AI.mode = ...`) car LeekScript ne permet pas les appels de méthode au scope global (en dehors des fonctions).
