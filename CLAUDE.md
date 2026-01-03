@@ -37,13 +37,17 @@ tagadai/
 ├── leekwars_gardener/        # REFERENCE ONLY - Python API wrapper
 ├── tagadalive/               # ACTIVE AI DEVELOPMENT - LeekScript v4 combat AI
 │   ├── AI/                   # Decision engine & scoring
+│   │   ├── Algorithms/       # Search algorithms (MCTS, PTS, BeamSearch, Hybrid)
+│   │   ├── Scoring           # Score calculation façade
+│   │   ├── ScoringConfig     # ML-tunable constants
+│   │   └── AI                # Mode dispatcher
 │   ├── Model/                # Entity, Item, Cell, Combo classes
 │   ├── Controlers/           # Fight logic, pathfinding, danger maps
 │   ├── Services/             # Damage calc, targeting, benchmarks
 │   ├── TESTS/                # Standalone unit tests (simpleTest, etc.)
 │   ├── tampermonkey/         # Browser userscripts for fight report analysis
 │   ├── TODO.md               # Static analysis issues tracker
-│   ├── main                  # Entry point
+│   ├── main                  # Entry point (algorithm mode selection)
 │   ├── auto                  # Include aggregator (includes all AI modules)
 │   └── testMain              # Integration tests (must be at ROOT for includes)
 ├── data/                     # Fight history, ML models, scraped data
@@ -67,12 +71,47 @@ Python tool for automating LeekWars account management. Use as **reference only*
 Combat AI written in **LeekScript v4** (~30 core files, modular architecture). This is the active codebase for AI development:
 
 **Core files**:
-- `main` - Entry point, decision loop
-- `AI/AI` - Core strategy: greedy multi-position search with consequence prediction
-- `AI/Scoring` - Weighted coefficient system for action evaluation, duration caching
+- `main` - Entry point, algorithm mode selection (see configuration box)
+- `AI/AI` - Mode dispatcher and utilities
+- `AI/Algorithms/` - Search algorithms:
+  - `PTS` - Priority Target Simulation (greedy, ~50k ops)
+  - `MCTS` - Monte Carlo Tree Search with UCB1 (~300k ops)
+  - `BeamSearch` - Multi-path beam search (~150k ops)
+  - `Hybrid` - Combined modes (PTS + MCTS/Beam)
+- `AI/Scoring` - Façade for action scoring: caches, getDynamicCoef, getEffectiveDuration
 - `Model/` - Entity, Item, Cell, Action, Combo classes
 - `Controlers/Maps/` - Pathfinding, danger maps, action generation
 - `Services/Damages` - Damage calculation with shields/erosion
+
+**Algorithm Modes** (set via `AI.mode` in `main`):
+| Mode | Constant | Description |
+|------|----------|-------------|
+| PTS | `MODE_PTS` | Fast greedy, target-first (~50k ops) |
+| MCTS | `MODE_MCTS` | Full tree search (~300k ops) |
+| BeamSearch | `MODE_BEAM` | Multi-path beam search (~150k ops) |
+| Hybrid | `MODE_HYBRID` | PTS seeds MCTS on 1 cell (~150k ops) |
+| Hybrid Guided | `MODE_HYBRID_GUIDED` | PTS guides MCTS cell order (~250k ops) **[DEFAULT]** |
+| Hybrid Beam | `MODE_HYBRID_BEAM` | PTS guides BeamSearch (~200k ops) |
+
+See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) for detailed algorithm documentation.
+
+**Scoring System Architecture** (modular, ML-tunable):
+```
+AI/
+├── ScoringConfig     # ML-tunable constants: weights, thresholds, duration tables
+├── EntityTypes       # Bulb type detection (BULB_FIRE, BULB_HEALER, etc.)
+├── EntityCoefs       # Base coefficient tables per entity type
+├── BattleState       # Per-turn team state: composition, flags, ratios, danger
+├── ScoringModifiers  # Pure modifier functions (lifeRatio, levelRatio, etc.)
+└── Scoring           # Façade: caches, getDynamicCoef(), getEffectiveDuration()
+```
+
+- **ScoringConfig**: All tunable constants (KILL_VALUE, W_DANGER_*, duration_mitigation maps)
+- **EntityTypes**: Extended entity types for bulbs (101-108), cached in Entity.extendedType
+- **EntityCoefs**: `baseCoefs[entityType][stat]` lookup tables
+- **BattleState**: Team composition (countFire, countHealer...), flags (enemyHasStr), ratios
+- **ScoringModifiers**: Stateless functions (getLifeRatioModifier, getWinningModifier, etc.)
+- **Scoring**: Orchestrates refresh(), provides getDynamicCoef() with all modifiers applied
 
 **Key patterns**: Consequence simulation, danger map caching, dual-phase exploration (offense vs offense+defense).
 
@@ -86,6 +125,7 @@ Combat AI written in **LeekScript v4** (~30 core files, modular architecture). T
 - **LS4 null coercion**: `null` is coerced to `0` in numeric contexts (arithmetic, comparisons)
 - **Type annotations are FREE**: Empirically tested - zero runtime operation cost
 - Cell 1312 (`Cell.SELF_CAST_ID`) is sentinel for self-cast actions (outside valid range 0-612)
+- **Entity.extendedType**: Cached bulb type (101-108) computed once in constructor, avoids repeated string comparisons
 
 **CRITICAL - Operation Limits**:
 LeekWars enforces strict operation limits per turn. Every loop iteration, function call, and computation counts against this budget. When proposing solutions for tagadalive code:
@@ -96,7 +136,10 @@ LeekWars enforces strict operation limits per turn. Every loop iteration, functi
 4. **Minimize nested loops**: Each nested loop multiplies complexity - flatten when possible or use early exits
 5. **Prefer O(1) over O(n)**: Use Maps for lookups instead of array searches when the same lookup happens multiple times
 
-Example: Instead of checking `isInvincible` during every damage calculation in Consequences, filter invincible enemies once during action creation in MapAction - saves thousands of operations.
+Examples:
+- Instead of checking `isInvincible` during every damage calculation in Consequences, filter invincible enemies once during action creation in MapAction - saves thousands of operations.
+- Use `Map<integer, boolean>` for set membership instead of `inArray()`: `if (chipMap[id])` is O(1) vs `inArray(chipArray, id)` is O(n).
+- Cache computed values on objects (e.g., `Entity.extendedType`) instead of recomputing via string comparisons.
 
 **TODO.md**: Tracks static analysis issues and improvements
 
@@ -104,7 +147,8 @@ Example: Instead of checking `isInvincible` during every damage calculation in C
 Browser userscripts for analyzing fight reports. Provides real-time visualization of AI debug output.
 
 **Purpose**: When viewing a fight report on LeekWars, these scripts display a panel showing:
-- Turn-by-turn MCTS stats (iterations, nodes, positions, best score)
+- Turn-by-turn algorithm stats (adapts to mode: MCTS, BeamSearch, or PTS)
+- Algorithm comparison banner (shows winner in hybrid modes: PTS vs MCTS/Beam)
 - Performance profiler (operation counts per function, grouped by category)
 - Combo analysis (top-scored action sequences with score breakdown)
 - Resource tracking (HP, TP, MP, cell position)
@@ -670,8 +714,10 @@ This ensures hard-won knowledge is preserved and the project improves with each 
    ```bash
    # Main AI logic
    cat tagadalive/AI/AI
-   # Scoring system
-   cat tagadalive/AI/Scoring
+   # Scoring system (modular architecture)
+   cat tagadalive/AI/ScoringConfig   # Constants and weights
+   cat tagadalive/AI/Scoring         # Façade and caches
+   cat tagadalive/AI/BattleState     # Per-turn team state
    # Static analysis issues
    cat tagadalive/TODO.md
    ```
