@@ -74,9 +74,10 @@ Combat AI written in **LeekScript v4** (~30 core files, modular architecture). T
 - `main` - Entry point, algorithm mode selection (see configuration box)
 - `AI/AI` - Mode dispatcher and utilities
 - `AI/Algorithms/` - Search algorithms:
-  - `PTS` - Priority Target Simulation (greedy, ~50k ops)
-  - `MCTS` - Monte Carlo Tree Search with UCB1 (~300k ops)
-  - `BeamSearch` - Multi-path beam search (~150k ops)
+  - `PTS` - Priority Target Simulation (greedy)
+  - `MCTS` - Monte Carlo Tree Search with UCB1
+  - `BeamSearch` - Multi-path beam search
+  - `UnifiedMCTS` - Single tree with cells as first-level nodes
   - `Hybrid` - Combined modes (PTS + MCTS/Beam)
 - `AI/Scoring` - Façade for action scoring: caches, getDynamicCoef, getEffectiveDuration
 - `Model/` - Entity, Item, Cell, Action, Combo classes
@@ -86,12 +87,13 @@ Combat AI written in **LeekScript v4** (~30 core files, modular architecture). T
 **Algorithm Modes** (set via `AI.mode` in `main`):
 | Mode | Constant | Description |
 |------|----------|-------------|
-| PTS | `MODE_PTS` | Fast greedy, target-first (~50k ops) |
-| MCTS | `MODE_MCTS` | Full tree search (~300k ops) |
-| BeamSearch | `MODE_BEAM` | Multi-path beam search (~150k ops) |
-| Hybrid | `MODE_HYBRID` | PTS seeds MCTS on 1 cell (~150k ops) |
-| Hybrid Guided | `MODE_HYBRID_GUIDED` | PTS guides MCTS cell order (~250k ops) **[DEFAULT]** |
-| Hybrid Beam | `MODE_HYBRID_BEAM` | PTS guides BeamSearch (~200k ops) |
+| PTS | `MODE_PTS` | Fast greedy, target-first |
+| MCTS | `MODE_MCTS` | Full tree search |
+| BeamSearch | `MODE_BEAM` | Multi-path beam search |
+| Hybrid | `MODE_HYBRID` | PTS seeds MCTS on 1 cell |
+| Hybrid Guided | `MODE_HYBRID_GUIDED` | PTS guides MCTS cell order |
+| Hybrid Beam | `MODE_HYBRID_BEAM` | PTS guides BeamSearch |
+| Unified MCTS | `MODE_UNIFIED_MCTS` | Single tree with cells as first-level **[DEFAULT]** |
 
 See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) for detailed algorithm documentation.
 
