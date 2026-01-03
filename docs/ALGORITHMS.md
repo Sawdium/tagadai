@@ -410,6 +410,13 @@ Les modes hybrides combinent PTS avec un autre algorithme pour bénéficier des 
 4. Retourner le meilleur des deux
 ```
 
+**Schéma** :
+```
+PTS ──→ cellule 245 ──→ MCTS(245) ──→ meilleur(PTS, MCTS)
+                            │
+                            └── (ignore les autres cellules)
+```
+
 **Avantages** :
 - Plus rapide que MCTS complet (1 cellule au lieu de toutes)
 - PTS guide vers une bonne cellule
@@ -436,10 +443,32 @@ Les modes hybrides combinent PTS avec un autre algorithme pour bénéficier des 
 4. Retourner max(ptsCombo, mctsCombo)
 ```
 
+**Schéma** :
+```
+PTS ──→ scores par cellule ──→ MCTS(245) ──→ MCTS(301) ──→ MCTS(189)...
+            │                      │             │             │
+            │                      └─────────────┴─────────────┘
+            │                           ordre de priorité PTS
+            └── 245: 800
+                301: 750
+                189: 600
+```
+
+**Exemple concret** :
+```
+1. PTS trouve un combo score 800 depuis cellule 245
+2. MCTS explore dans l'ordre PTS :
+   - Cellule 245 → score 850
+   - Cellule 301 → score 920  ← Meilleur !
+   - Cellule 189 → (budget épuisé, skip)
+3. Retourne MCTS(301) avec score 920
+```
+
 **Avantages** :
 - Vrai MCTS complet (toutes les cellules)
 - Dégradation intelligente : si budget serré, meilleures cellules explorées d'abord
 - Ne peut jamais faire pire que PTS seul
+- Peut trouver un meilleur combo depuis une cellule différente de celle de PTS
 
 **Inconvénients** :
 - Plus lent que HYBRID simple
