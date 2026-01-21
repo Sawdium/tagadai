@@ -144,6 +144,14 @@ Examples:
 - Use `Map<integer, boolean>` for set membership instead of `inArray()`: `if (chipMap[id])` is O(1) vs `inArray(chipArray, id)` is O(n).
 - Cache computed values on objects (e.g., `Entity.extendedType`) instead of recomputing via string comparisons.
 
+**CRITICAL - Debugging AI Errors**:
+When a test fight crashes or shows "AI has ERRORS", do NOT assume it's an operation limit issue. The error could be:
+- **Compilation error**: Undefined constants, type mismatches, invalid constructors
+- **Runtime error**: Null pointer, invalid array access, division by zero
+- **Operation limit**: Only one of many possible causes
+
+**Always ask the user for the actual error message** from the LeekWars editor or fight report before attempting fixes. The user can see detailed compiler errors in the LeekWars IDE that are not available through the API.
+
 **TODO.md**: Tracks static analysis issues and improvements
 
 ### tagadalive/tampermonkey/
