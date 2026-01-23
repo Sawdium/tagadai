@@ -129,6 +129,7 @@ AI/
 - Cell 1312 (`Cell.SELF_CAST_ID`) is sentinel for self-cast actions (outside valid range 0-612)
 - **Entity.extendedType**: Cached bulb type (101-108) computed once in constructor, avoids repeated string comparisons
 - **CRITICAL - Map iteration**: `for (x in map)` iterates **VALUES**, not keys (unlike JavaScript). To iterate keys, use `for (key : value in map)`. This is a common bug source when working with `Map<Cell, Cell>` where keys and values are the same type.
+- **CRITICAL - Semicolons on bare return**: LeekScript normally doesn't require semicolons, but `if (x) return` (bare return with no value) MUST have a semicolon: `if (x) return;`. Without it, the parser fails. This only applies to bare `return`, not `return value`.
 
 **CRITICAL - Operation Limits**:
 LeekWars enforces strict operation limits per turn. Every loop iteration, function call, and computation counts against this budget. When proposing solutions for tagadalive code:
