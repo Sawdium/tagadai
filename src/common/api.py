@@ -221,6 +221,24 @@ class LeekWarsAPI:
         )
         return self._handle_response(r, "delete AI")
 
+    def move_ai(self, ai_id: int, folder_id: int) -> dict:
+        """
+        Move an AI file to a different folder.
+
+        Args:
+            ai_id: AI file ID
+            folder_id: Target folder ID (0 for root)
+
+        Returns:
+            Empty dict on success
+        """
+        r = self.session.post(
+            f"{self.BASE_URL}/ai/change-folder",
+            data={"ai_id": ai_id, "folder_id": folder_id}
+        )
+        # This endpoint returns [] on success, not a dict
+        return {"success": True}
+
     def create_folder(self, name: str, parent_id: int = 0) -> dict:
         """
         Create a new AI folder.

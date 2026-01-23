@@ -10,6 +10,7 @@ Usage:
     python -m src.tools.aisync put <ai_id> -            # Upload code from stdin to AI
     python -m src.tools.aisync new <name> [folder_id]   # Create new AI file
     python -m src.tools.aisync rename <ai_id> <name>    # Rename AI file
+    python -m src.tools.aisync move <ai_id> <folder>    # Move AI to folder (path or id)
     python -m src.tools.aisync delete <ai_id>           # Delete AI file
     python -m src.tools.aisync download <dir>           # Download all AI files to directory
 """
@@ -119,6 +120,64 @@ def cmd_rename(api: LeekWarsAPI, args):
     """Rename AI file."""
     api.rename_ai(args.ai_id, args.name)
     print(f"Renamed AI {args.ai_id} to '{args.name}'", file=sys.stderr)
+
+
+def cmd_move(api: LeekWarsAPI, args):
+    """Move AI file to a different folder."""
+    data = api.get_farmer_ais()
+
+    # Get AI name for feedback
+    ai_name = None
+    for ai in data.get("ais", []):
+        if ai["id"] == args.ai_id:
+            ai_name = ai["name"]
+            break
+
+    if not ai_name:
+        raise Exception(f"AI {args.ai_id} not found")
+
+    # Resolve folder - can be ID or path
+    folder_id = None
+
+    # Try as integer first
+    try:
+        folder_id = int(args.folder)
+        # Validate folder exists (0 is root, always valid)
+        if folder_id != 0:
+            folders = {f["id"]: f["name"] for f in data.get("folders", [])}
+            if folder_id not in folders:
+                raise Exception(f"Folder ID {folder_id} not found")
+    except ValueError:
+        # It's a path, resolve it
+        folder_path = args.folder.strip("/")
+
+        # Build path -> id mapping
+        folders = {0: {"name": "", "parent": None}}
+        for f in data.get("folders", []):
+            folders[f["id"]] = {"name": f["name"], "parent": f.get("folder", 0)}
+
+        def get_path(fid: int) -> str:
+            if fid == 0:
+                return ""
+            parts = []
+            current = fid
+            while current != 0 and current in folders:
+                parts.append(folders[current]["name"])
+                current = folders[current]["parent"] or 0
+            return "/".join(reversed(parts))
+
+        # Find folder by path
+        for fid in folders:
+            if get_path(fid) == folder_path:
+                folder_id = fid
+                break
+
+        if folder_id is None:
+            raise Exception(f"Folder '{args.folder}' not found")
+
+    api.move_ai(args.ai_id, folder_id)
+    folder_name = args.folder if not str(args.folder).isdigit() else f"id:{folder_id}"
+    print(f"Moved AI '{ai_name}' to [{folder_name}]", file=sys.stderr)
 
 
 def cmd_mkdir(api: LeekWarsAPI, args):
@@ -234,6 +293,11 @@ def main():
     p_rename.add_argument("ai_id", type=int, help="AI ID to rename")
     p_rename.add_argument("name", help="New name")
 
+    # move
+    p_move = subparsers.add_parser("move", help="Move AI to folder")
+    p_move.add_argument("ai_id", type=int, help="AI ID to move")
+    p_move.add_argument("folder", help="Target folder (path like 'Controlers' or ID)")
+
     # mkdir
     p_mkdir = subparsers.add_parser("mkdir", help="Create folder")
     p_mkdir.add_argument("name", help="Folder name")
@@ -269,6 +333,8 @@ def main():
             cmd_new(api, args)
         elif args.command == "rename":
             cmd_rename(api, args)
+        elif args.command == "move":
+            cmd_move(api, args)
         elif args.command == "mkdir":
             cmd_mkdir(api, args)
         elif args.command == "delete":
