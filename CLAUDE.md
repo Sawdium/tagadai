@@ -1,5 +1,23 @@
 # TagadAI - LeekWars Intelligent Combat System
 
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Quick Start](#quick-start)
+- [Directory Structure](#directory-structure)
+- [CLI Tools](#cli-tools)
+- [Testing](#testing)
+- [Development Guidelines](#development-guidelines)
+- [LeekScript AI Development (tagadalive/)](#leekscript-ai-development-tagadalive)
+- [Python Infrastructure](#python-infrastructure)
+- [Reference: LeekWars API](#reference-leekwars-api)
+- [Reference: Fight Result Structure](#reference-fight-result-structure)
+- [Reference: LeekScript](#reference-leekscript)
+- [Strategy & Roadmap](#strategy--roadmap)
+- [Key Resources](#key-resources)
+
+---
+
 ## Project Overview
 
 This project creates an autonomous AI system for LeekWars, a browser-based programming game where players write JavaScript-like code (LeekScript) to control "leeks" in automated battles.
@@ -9,6 +27,66 @@ This project creates an autonomous AI system for LeekWars, a browser-based progr
 2. Analyzes fight results by interpreting action logs
 3. Learns from outcomes and updates AI code to improve performance
 4. Iterates continuously toward optimal combat strategies
+
+---
+
+## Quick Start
+
+### 1. Setup Credentials
+
+Credentials are stored in `.env` (gitignored, 600 permissions):
+```bash
+# .env format:
+LEEKWARS_LOGIN=your_email
+LEEKWARS_PASSWORD=your_password
+```
+
+Load credentials in Python:
+```python
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+login = os.getenv("LEEKWARS_LOGIN")
+password = os.getenv("LEEKWARS_PASSWORD")
+```
+
+### 2. Essential Commands
+
+```bash
+# Check account status
+python -m src.tools.status
+
+# List AI files on account
+python -m src.tools.aisync list
+
+# Upload a file
+python -m src.tools.aisync put <ai_id> tagadalive/<path>
+
+# Download a file
+python -m src.tools.aisync get <ai_id> -o tagadalive/<path>
+
+# Run FREE test fight vs Domingo
+python -m src.tools.fight
+
+# Run test fight vs active opponent (RECOMMENDED for combat testing)
+python -m src.tools.fight --scenario 37772
+```
+
+### 3. Study the AI Code
+
+```bash
+# Main AI logic
+cat tagadalive/AI/AI
+# Scoring system (modular architecture)
+cat tagadalive/AI/ScoringConfig   # Constants and weights
+cat tagadalive/AI/Scoring         # Façade and caches
+cat tagadalive/AI/BattleState     # Per-turn team state
+# Static analysis issues
+cat tagadalive/TODO.md
+```
+
+---
 
 ## Directory Structure
 
@@ -54,154 +132,7 @@ tagadai/
 └── tests/                    # Test suite
 ```
 
-## Important Constraints
-
-### Reference Code - DO NOT MODIFY
-
-#### leekwars_gardener/
-Python tool for automating LeekWars account management. Use as **reference only**:
-- `lwapi.py` - API endpoint patterns and authentication
-- `main.py` - Fight orchestration patterns
-- `utils.py` - Constants and data structures
-- **Never edit these files**
-
-## Active AI Development
-
-### tagadalive/
-Combat AI written in **LeekScript v4** (~30 core files, modular architecture). This is the active codebase for AI development:
-
-**Core files**:
-- `main` - Entry point, algorithm mode selection (see configuration box)
-- `AI/AI` - Mode dispatcher and utilities
-- `AI/Algorithms/` - Search algorithms:
-  - `PTS` - Priority Target Simulation (greedy)
-  - `MCTS` - Monte Carlo Tree Search with UCB1
-  - `BeamSearch` - Multi-path beam search
-  - `UnifiedMCTS` - Single tree with cells as first-level nodes
-  - `Hybrid` - Combined modes (PTS + MCTS/Beam)
-- `AI/Scoring` - Façade for action scoring: caches, getDynamicCoef, getEffectiveDuration
-- `Model/` - Entity, Item, Cell, Action, Combo classes
-- `Controlers/Maps/` - Pathfinding, danger maps, action generation
-- `Services/Damages` - Damage calculation with shields/erosion
-
-**Algorithm Modes** (set via `AI.mode` in `main`):
-| Mode | Constant | Description |
-|------|----------|-------------|
-| PTS | `MODE_PTS` | Fast greedy, target-first |
-| MCTS | `MODE_MCTS` | Full tree search |
-| BeamSearch | `MODE_BEAM` | Multi-path beam search |
-| Hybrid | `MODE_HYBRID` | PTS seeds MCTS on 1 cell |
-| Hybrid Guided | `MODE_HYBRID_GUIDED` | PTS guides MCTS cell order |
-| Hybrid Beam | `MODE_HYBRID_BEAM` | PTS guides BeamSearch |
-| Unified MCTS | `MODE_UNIFIED_MCTS` | Single tree with cells as first-level **[DEFAULT]** |
-
-See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) for detailed algorithm documentation.
-
-**Scoring System Architecture** (modular, ML-tunable):
-```
-AI/
-├── ScoringConfig     # ML-tunable constants: weights, thresholds, duration tables
-├── EntityTypes       # Bulb type detection (BULB_FIRE, BULB_HEALER, etc.)
-├── EntityCoefs       # Base coefficient tables per entity type
-├── BattleState       # Per-turn team state: composition, flags, ratios, danger
-├── ScoringModifiers  # Pure modifier functions (lifeRatio, levelRatio, etc.)
-└── Scoring           # Façade: caches, getDynamicCoef(), getEffectiveDuration()
-```
-
-- **ScoringConfig**: All tunable constants (KILL_VALUE, W_DANGER_*, duration_mitigation maps)
-- **EntityTypes**: Extended entity types for bulbs (101-108), cached in Entity.extendedType
-- **EntityCoefs**: `baseCoefs[entityType][stat]` lookup tables
-- **BattleState**: Team composition (countFire, countHealer...), flags (enemyHasStr), ratios
-- **ScoringModifiers**: Stateless functions (getLifeRatioModifier, getWinningModifier, etc.)
-- **Scoring**: Orchestrates refresh(), provides getDynamicCoef() with all modifiers applied
-
-**Key patterns**: Consequence simulation, danger map caching, dual-phase exploration (offense vs offense+defense).
-
-**LeekScript v4 features used**:
-- Full variable/method typing (zero runtime cost - empirically tested)
-- Array vs Map distinction (`Board` class replaces old `Map`)
-- Typed function parameters and return types
-- Nullable types with `?` suffix and `!` force-unwrap
-
-**Language notes**:
-- **LS4 null coercion**: `null` is coerced to `0` in numeric contexts (arithmetic, comparisons)
-- **Type annotations are FREE**: Empirically tested - zero runtime operation cost
-- Cell 1312 (`Cell.SELF_CAST_ID`) is sentinel for self-cast actions (outside valid range 0-612)
-- **Entity.extendedType**: Cached bulb type (101-108) computed once in constructor, avoids repeated string comparisons
-- **CRITICAL - Map iteration**: `for (x in map)` iterates **VALUES**, not keys (unlike JavaScript). To iterate keys, use `for (key : value in map)`. This is a common bug source when working with `Map<Cell, Cell>` where keys and values are the same type.
-- **CRITICAL - Semicolons on bare return**: LeekScript normally doesn't require semicolons, but `if (x) return` (bare return with no value) MUST have a semicolon: `if (x) return;`. Without it, the parser fails. This only applies to bare `return`, not `return value`.
-
-**CRITICAL - Operation Limits**:
-LeekWars enforces strict operation limits per turn. Every loop iteration, function call, and computation counts against this budget. When proposing solutions for tagadalive code:
-
-1. **Think complexity first**: Before implementing any solution, analyze its computational complexity (O(n), O(n²), etc.) and consider the worst-case scenario
-2. **Filter early**: Apply filters at the earliest possible point to reduce the dataset size before expensive operations (e.g., filter invincible enemies at action creation, not during scoring)
-3. **Avoid redundant work**: Cache computed values, use lookup maps instead of repeated searches
-4. **Minimize nested loops**: Each nested loop multiplies complexity - flatten when possible or use early exits
-5. **Prefer O(1) over O(n)**: Use Maps for lookups instead of array searches when the same lookup happens multiple times
-
-Examples:
-- Instead of checking `isInvincible` during every damage calculation in Consequences, filter invincible enemies once during action creation in MapAction - saves thousands of operations.
-- Use `Map<integer, boolean>` for set membership instead of `inArray()`: `if (chipMap[id])` is O(1) vs `inArray(chipArray, id)` is O(n).
-- Cache computed values on objects (e.g., `Entity.extendedType`) instead of recomputing via string comparisons.
-
-**CRITICAL - Debugging AI Errors**:
-When a test fight crashes or shows "AI has ERRORS", do NOT assume it's an operation limit issue. The error could be:
-- **Compilation error**: Undefined constants, type mismatches, invalid constructors
-- **Runtime error**: Null pointer, invalid array access, division by zero
-- **Operation limit**: Only one of many possible causes
-
-**Always ask the user for the actual error message** from the LeekWars editor or fight report before attempting fixes. The user can see detailed compiler errors in the LeekWars IDE that are not available through the API.
-
-**TODO.md**: Tracks static analysis issues and improvements
-
-### tagadalive/tampermonkey/
-Browser userscripts for analyzing fight reports. Provides real-time visualization of AI debug output.
-
-**Purpose**: When viewing a fight report on LeekWars, these scripts display a panel showing:
-- Turn-by-turn algorithm stats (adapts to mode: MCTS, BeamSearch, or PTS)
-- Algorithm comparison banner (shows winner in hybrid modes: PTS vs MCTS/Beam)
-- Performance profiler (operation counts per function, grouped by category)
-- Combo analysis (top-scored action sequences with score breakdown)
-- Resource tracking (HP, TP, MP, cell position)
-- Error detection (AI crashes with stack traces)
-
-**Architecture**: 6 modular Tampermonkey scripts that load in sequence:
-- `lwa-core.user.js` - Shared state and helpers
-- `lwa-styles.user.js` - CSS styling
-- `lwa-parser.user.js` - Log parsing
-- `lwa-ui.user.js` - UI rendering
-- `lwa-charts.user.js` - Chart.js visualizations
-- `lwa-main.user.js` - Initialization
-
-**Documentation**: See `tagadalive/tampermonkey/README.md` for installation and usage details.
-
-## Common Module
-
-The `src/common/` module provides shared utilities used across all tools:
-
-```python
-from src.common import LeekWarsAPI, load_credentials, get_project_root
-from src.common.errors import TagadAIError, APIError, AuthenticationError
-
-# Load credentials from .env
-login, password = load_credentials()
-
-# Create and authenticate API client
-api = LeekWarsAPI()
-api.login(login, password)
-
-# Use any API method
-farmer_ais = api.get_farmer_ais()
-opponents = api.get_leek_opponents(leek_id)
-fight_id = api.start_test_fight(ai_id)
-```
-
-**Components:**
-- `api.py` - Unified `LeekWarsAPI` client with all endpoints
-- `config.py` - `ProjectPaths` class for centralized path management
-- `credentials.py` - `load_credentials()` for secure credential loading
-- `errors.py` - Exception hierarchy (`TagadAIError`, `APIError`, `AuthenticationError`, etc.)
+---
 
 ## CLI Tools
 
@@ -247,6 +178,7 @@ python -m src.tools.aisync put <ai_id> <file>    # Upload code from file
 python -m src.tools.aisync put <ai_id> -         # Upload code from stdin
 python -m src.tools.aisync new <name>            # Create new AI file
 python -m src.tools.aisync rename <ai_id> <name> # Rename AI file
+python -m src.tools.aisync move <ai_id> <folder> # Move AI file to folder
 ```
 
 **CRITICAL: Upload Safety Guidelines**
@@ -286,17 +218,7 @@ python -m src.tools.rl env --episodes 5        # Test RL environment
 ```
 See [docs/RL.md](docs/RL.md) for full documentation.
 
-## ML Infrastructure
-
-Five modules support ML-based AI training. Each has its own documentation:
-
-| Module | Purpose | Entry Point |
-|--------|---------|-------------|
-| `src/dashboard/` | Web UI for training monitoring | `python -m src.dashboard` |
-| `src/scraper/` | Fight data collection from API | Library (see README) |
-| `src/ml/` | Neural network training pipeline | Library (see README) |
-| `src/localfight/` | Offline fight execution via JAR | Library (see README) |
-| `src/rl/` | RL environment and telemetry | `python -m src.tools.rl` (see [docs/RL.md](docs/RL.md)) |
+---
 
 ## Testing
 
@@ -383,7 +305,259 @@ Tests use `debug()` with this format for the testrunner to parse:
 
 The `global testsDone` flag ensures tests run only once across multiple turns.
 
-## LeekWars API Reference
+---
+
+## Development Guidelines
+
+### Code Style
+- Python 3.10+ for main project
+- Type hints for all functions
+- Docstrings for public APIs
+- pytest for testing
+
+### Error Handling
+- Graceful handling of API rate limits
+- Retry logic for transient failures
+- Logging of all API interactions
+- Save fight data locally for offline analysis
+
+### Security
+- Never commit credentials
+- Use environment variables for secrets
+- Rate limit API calls responsibly
+
+### Git Commits
+- Do NOT include Claude references in commit messages (no "Generated with Claude", no "Co-Authored-By: Claude")
+- Write commit messages as if written by the developer
+- Keep messages concise and descriptive
+
+### Knowledge Consolidation
+
+When encountering and fixing issues related to LeekWars API, LeekScript, test fights, CLI tools, or any project-specific behavior:
+
+**IMPORTANT**: Before making any consolidation changes, report to the user and propose a consolidation plan. Wait for approval before proceeding.
+
+The consolidation plan should cover:
+1. **Document the issue**: Add the root cause and fix to relevant documentation (this file, `docs/LEEKWARS_API.md`, or inline comments)
+2. **Update scripts**: If a tool had a bug or missing feature, ensure the fix is complete and robust
+3. **Add to TODO.md**: If the issue reveals broader problems in LeekScript code, track them in `tagadalive/TODO.md`
+4. **Prevent recurrence**: Add examples, warnings, or clarifications so the same mistake isn't repeated
+5. **Update tests**: If applicable, add test cases to catch similar issues
+
+This ensures hard-won knowledge is preserved and the project improves with each debugging session.
+
+---
+
+## LeekScript AI Development (tagadalive/)
+
+Combat AI written in **LeekScript v4** (~30 core files, modular architecture). This is the active codebase for AI development.
+
+### CRITICAL: LeekScript Gotchas
+
+> **Read this section carefully** - these are common bugs that are hard to debug.
+
+#### Map Iteration (VALUES, not keys!)
+
+```javascript
+// WRONG - iterates VALUES, not keys (unlike JavaScript)
+for (x in map) { ... }
+
+// CORRECT - iterate keys
+for (key : value in map) { ... }
+```
+
+This is a common bug source when working with `Map<Cell, Cell>` where keys and values are the same type.
+
+#### Bare Return Requires Semicolon
+
+LeekScript normally doesn't require semicolons, but bare `return` (with no value) MUST have a semicolon:
+
+```javascript
+// WRONG - parser fails
+if (x) return
+
+// CORRECT
+if (x) return;
+
+// Also correct (return with value doesn't need semicolon)
+if (x) return value
+```
+
+#### Operation Limits
+
+LeekWars enforces strict operation limits per turn. Every loop iteration, function call, and computation counts against this budget. When proposing solutions for tagadalive code:
+
+1. **Think complexity first**: Before implementing any solution, analyze its computational complexity (O(n), O(n²), etc.) and consider the worst-case scenario
+2. **Filter early**: Apply filters at the earliest possible point to reduce the dataset size before expensive operations (e.g., filter invincible enemies at action creation, not during scoring)
+3. **Avoid redundant work**: Cache computed values, use lookup maps instead of repeated searches
+4. **Minimize nested loops**: Each nested loop multiplies complexity - flatten when possible or use early exits
+5. **Prefer O(1) over O(n)**: Use Maps for lookups instead of array searches when the same lookup happens multiple times
+
+**Examples:**
+- Instead of checking `isInvincible` during every damage calculation in Consequences, filter invincible enemies once during action creation in MapAction - saves thousands of operations.
+- Use `Map<integer, boolean>` for set membership instead of `inArray()`: `if (chipMap[id])` is O(1) vs `inArray(chipArray, id)` is O(n).
+- Cache computed values on objects (e.g., `Entity.extendedType`) instead of recomputing via string comparisons.
+
+#### Debugging AI Errors
+
+When a test fight crashes or shows "AI has ERRORS", do NOT assume it's an operation limit issue. The error could be:
+- **Compilation error**: Undefined constants, type mismatches, invalid constructors
+- **Runtime error**: Null pointer, invalid array access, division by zero
+- **Operation limit**: Only one of many possible causes
+
+**Always ask the user for the actual error message** from the LeekWars editor or fight report before attempting fixes. The user can see detailed compiler errors in the LeekWars IDE that are not available through the API.
+
+#### Other Language Notes
+
+- **LS4 null coercion**: `null` is coerced to `0` in numeric contexts (arithmetic, comparisons)
+- **Type annotations are FREE**: Empirically tested - zero runtime operation cost
+- Cell 1312 (`Cell.SELF_CAST_ID`) is sentinel for self-cast actions (outside valid range 0-612)
+- **Entity.extendedType**: Cached bulb type (101-108) computed once in constructor, avoids repeated string comparisons
+
+### Architecture Overview
+
+**Core files**:
+- `main` - Entry point, algorithm mode selection (see configuration box)
+- `AI/AI` - Mode dispatcher and utilities
+- `AI/Algorithms/` - Search algorithms:
+  - `PTS` - Priority Target Simulation (greedy)
+  - `MCTS` - Monte Carlo Tree Search with UCB1
+  - `BeamSearch` - Multi-path beam search
+  - `UnifiedMCTS` - Single tree with cells as first-level nodes
+  - `Hybrid` - Combined modes (PTS + MCTS/Beam)
+- `AI/Scoring` - Façade for action scoring: caches, getDynamicCoef, getEffectiveDuration
+- `Model/` - Entity, Item, Cell, Action, Combo classes
+- `Controlers/Maps/` - Pathfinding, danger maps, action generation
+- `Services/Damages` - Damage calculation with shields/erosion
+
+**Key patterns**: Consequence simulation, danger map caching, dual-phase exploration (offense vs offense+defense).
+
+### Algorithm Modes
+
+Set via `AI.mode` in `main`:
+
+| Mode | Constant | Description |
+|------|----------|-------------|
+| PTS | `MODE_PTS` | Fast greedy, target-first |
+| MCTS | `MODE_MCTS` | Full tree search |
+| BeamSearch | `MODE_BEAM` | Multi-path beam search |
+| Hybrid | `MODE_HYBRID` | PTS seeds MCTS on 1 cell |
+| Hybrid Guided | `MODE_HYBRID_GUIDED` | PTS guides MCTS cell order |
+| Hybrid Beam | `MODE_HYBRID_BEAM` | PTS guides BeamSearch |
+| Unified MCTS | `MODE_UNIFIED_MCTS` | Single tree with cells as first-level **[DEFAULT]** |
+
+See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) for detailed algorithm documentation.
+
+### Scoring System Architecture
+
+Modular, ML-tunable scoring system:
+
+```
+AI/
+├── ScoringConfig     # ML-tunable constants: weights, thresholds, duration tables
+├── EntityTypes       # Bulb type detection (BULB_FIRE, BULB_HEALER, etc.)
+├── EntityCoefs       # Base coefficient tables per entity type
+├── BattleState       # Per-turn team state: composition, flags, ratios, danger
+├── ScoringModifiers  # Pure modifier functions (lifeRatio, levelRatio, etc.)
+└── Scoring           # Façade: caches, getDynamicCoef(), getEffectiveDuration()
+```
+
+- **ScoringConfig**: All tunable constants (KILL_VALUE, W_DANGER_*, duration_mitigation maps)
+- **EntityTypes**: Extended entity types for bulbs (101-108), cached in Entity.extendedType
+- **EntityCoefs**: `baseCoefs[entityType][stat]` lookup tables
+- **BattleState**: Team composition (countFire, countHealer...), flags (enemyHasStr), ratios
+- **ScoringModifiers**: Stateless functions (getLifeRatioModifier, getWinningModifier, etc.)
+- **Scoring**: Orchestrates refresh(), provides getDynamicCoef() with all modifiers applied
+
+### LeekScript v4 Features Used
+
+- Full variable/method typing (zero runtime cost - empirically tested)
+- Array vs Map distinction (`Board` class replaces old `Map`)
+- Typed function parameters and return types
+- Nullable types with `?` suffix and `!` force-unwrap
+
+### Tampermonkey Tools
+
+Browser userscripts in `tagadalive/tampermonkey/` for analyzing fight reports. Provides real-time visualization of AI debug output.
+
+**Purpose**: When viewing a fight report on LeekWars, these scripts display a panel showing:
+- Turn-by-turn algorithm stats (adapts to mode: MCTS, BeamSearch, or PTS)
+- Algorithm comparison banner (shows winner in hybrid modes: PTS vs MCTS/Beam)
+- Performance profiler (operation counts per function, grouped by category)
+- Combo analysis (top-scored action sequences with score breakdown)
+- Resource tracking (HP, TP, MP, cell position)
+- Error detection (AI crashes with stack traces)
+
+**Architecture**: 6 modular Tampermonkey scripts that load in sequence:
+- `lwa-core.user.js` - Shared state and helpers
+- `lwa-styles.user.js` - CSS styling
+- `lwa-parser.user.js` - Log parsing
+- `lwa-ui.user.js` - UI rendering
+- `lwa-charts.user.js` - Chart.js visualizations
+- `lwa-main.user.js` - Initialization
+
+**Documentation**: See `tagadalive/tampermonkey/README.md` for installation and usage details.
+
+### TODO.md
+
+`tagadalive/TODO.md` tracks static analysis issues and improvements for the LeekScript codebase.
+
+---
+
+## Python Infrastructure
+
+### Common Module
+
+The `src/common/` module provides shared utilities used across all tools:
+
+```python
+from src.common import LeekWarsAPI, load_credentials, get_project_root
+from src.common.errors import TagadAIError, APIError, AuthenticationError
+
+# Load credentials from .env
+login, password = load_credentials()
+
+# Create and authenticate API client
+api = LeekWarsAPI()
+api.login(login, password)
+
+# Use any API method
+farmer_ais = api.get_farmer_ais()
+opponents = api.get_leek_opponents(leek_id)
+fight_id = api.start_test_fight(ai_id)
+```
+
+**Components:**
+- `api.py` - Unified `LeekWarsAPI` client with all endpoints
+- `config.py` - `ProjectPaths` class for centralized path management
+- `credentials.py` - `load_credentials()` for secure credential loading
+- `errors.py` - Exception hierarchy (`TagadAIError`, `APIError`, `AuthenticationError`, etc.)
+
+### ML Infrastructure
+
+Five modules support ML-based AI training. Each has its own documentation:
+
+| Module | Purpose | Entry Point |
+|--------|---------|-------------|
+| `src/dashboard/` | Web UI for training monitoring | `python -m src.dashboard` |
+| `src/scraper/` | Fight data collection from API | Library (see README) |
+| `src/ml/` | Neural network training pipeline | Library (see README) |
+| `src/localfight/` | Offline fight execution via JAR | Library (see README) |
+| `src/rl/` | RL environment and telemetry | `python -m src.tools.rl` (see [docs/RL.md](docs/RL.md)) |
+
+### Reference Code - DO NOT MODIFY
+
+#### leekwars_gardener/
+
+Python tool for automating LeekWars account management. Use as **reference only**:
+- `lwapi.py` - API endpoint patterns and authentication
+- `main.py` - Fight orchestration patterns
+- `utils.py` - Constants and data structures
+- **Never edit these files**
+
+---
+
+## Reference: LeekWars API
 
 > **Full API documentation**: See [docs/LEEKWARS_API.md](docs/LEEKWARS_API.md) for complete endpoint reference.
 
@@ -462,7 +636,9 @@ POST /leek/set-register/{leek_id}/{key}/{value}
 DELETE /leek/delete-register/{leek_id}/{key}
 ```
 
-## Fight Result Structure
+---
+
+## Reference: Fight Result Structure
 
 Fight results from `/fight/get/{id}` contain the complete battle log:
 
@@ -482,7 +658,7 @@ Fight results from `/fight/get/{id}` contain the complete battle log:
 }
 ```
 
-### Action Types (in `actions` array)
+### Action Types
 
 | ID | Action | Format | Description |
 |----|--------|--------|-------------|
@@ -499,6 +675,7 @@ Fight results from `/fight/get/{id}` contain the complete battle log:
 | 301 | ADD_EFFECT | `[301, weapon, effect_id, src, tgt, type, val, dur]` | Status effect applied |
 
 ### Leek Object Structure
+
 ```json
 {
   "id": 123,
@@ -517,7 +694,9 @@ Fight results from `/fight/get/{id}` contain the complete battle log:
 }
 ```
 
-## LeekScript Reference
+---
+
+## Reference: LeekScript
 
 LeekScript is the language used to program leek AI. It's similar to JavaScript with game-specific functions.
 
@@ -577,6 +756,7 @@ arraySort(array, key)        // Sort array
 ```
 
 ### Common Constants
+
 ```javascript
 // Weapons
 WEAPON_PISTOL, WEAPON_MACHINE_GUN, WEAPON_SHOTGUN,
@@ -595,6 +775,7 @@ USE_INVALID_TARGET, USE_INVALID_POSITION
 ```
 
 ### Example AI Pattern
+
 ```javascript
 // Basic combat AI
 var enemy = getNearestEnemy()
@@ -614,16 +795,20 @@ if (enemy != null) {
 }
 ```
 
-## Analysis Strategy
+---
 
-### Fight Analysis Goals
+## Strategy & Roadmap
+
+### Analysis Strategy
+
+#### Fight Analysis Goals
 1. **Action Efficiency**: Track TP/MP usage per turn
 2. **Damage Analysis**: Calculate damage dealt vs received
 3. **Positioning**: Analyze movement patterns and positioning
 4. **Decision Points**: Identify key moments that determined outcome
 5. **Opponent Patterns**: Learn from enemy AI behaviors
 
-### Metrics to Extract
+#### Metrics to Extract
 ```python
 # Per-fight metrics
 total_damage_dealt = sum(action[4] for action in actions if action[0] == 101 and is_enemy(action[1]))
@@ -638,9 +823,9 @@ average_damage_per_turn = {}
 common_loss_patterns = []
 ```
 
-## AI Generation Strategy
+### AI Generation Strategy
 
-### Iterative Improvement Loop
+#### Iterative Improvement Loop
 1. **Baseline**: Start with simple combat AI
 2. **Fight**: Run multiple fights against varied opponents
 3. **Analyze**: Extract performance metrics from results
@@ -649,108 +834,13 @@ common_loss_patterns = []
 6. **Validate**: Test changes against similar opponents
 7. **Repeat**: Continue iteration
 
-### Code Generation Approaches
+#### Code Generation Approaches
 - **Template-based**: Parameterized AI templates
 - **Rule extraction**: Convert analysis insights to code rules
 - **Strategy switching**: Multiple strategies selected by context
 - **LLM-assisted**: Use Claude to suggest code improvements
 
-## Development Guidelines
-
-### Code Style
-- Python 3.10+ for main project
-- Type hints for all functions
-- Docstrings for public APIs
-- pytest for testing
-
-### Error Handling
-- Graceful handling of API rate limits
-- Retry logic for transient failures
-- Logging of all API interactions
-- Save fight data locally for offline analysis
-
-### Security
-- Never commit credentials
-- Use environment variables for secrets
-- Rate limit API calls responsibly
-
-### Git Commits
-- Do NOT include Claude references in commit messages (no "Generated with Claude", no "Co-Authored-By: Claude")
-- Write commit messages as if written by the developer
-- Keep messages concise and descriptive
-
-### Knowledge Consolidation
-When encountering and fixing issues related to LeekWars API, LeekScript, test fights, CLI tools, or any project-specific behavior:
-
-**IMPORTANT**: Before making any consolidation changes, report to the user and propose a consolidation plan. Wait for approval before proceeding.
-
-The consolidation plan should cover:
-1. **Document the issue**: Add the root cause and fix to relevant documentation (this file, `docs/LEEKWARS_API.md`, or inline comments)
-2. **Update scripts**: If a tool had a bug or missing feature, ensure the fix is complete and robust
-3. **Add to TODO.md**: If the issue reveals broader problems in LeekScript code, track them in `tagadalive/TODO.md`
-4. **Prevent recurrence**: Add examples, warnings, or clarifications so the same mistake isn't repeated
-5. **Update tests**: If applicable, add test cases to catch similar issues
-
-This ensures hard-won knowledge is preserved and the project improves with each debugging session.
-
-## Key Resources
-
-- **[docs/LEEKWARS_API.md](docs/LEEKWARS_API.md)** - Complete local API reference (use this first!)
-- [LeekWars Official](https://leekwars.com/)
-- [API Documentation](https://leekwars.com/help/api)
-- [LeekScript Docs](https://leekwars.com/help/documentation)
-- [LeekWars GitHub](https://github.com/leek-wars)
-- [Fight Generator](https://github.com/leek-wars/leek-wars-generator)
-- [Community API Docs](https://github.com/LeBezout/LEEK-WARS)
-
-## Getting Started
-
-1. Credentials are stored in `.env` (gitignored, 600 permissions):
-   ```bash
-   # .env format:
-   LEEKWARS_LOGIN=your_email
-   LEEKWARS_PASSWORD=your_password
-   ```
-
-2. Load credentials in Python:
-   ```python
-   from dotenv import load_dotenv
-   import os
-
-   load_dotenv()
-   login = os.getenv("LEEKWARS_LOGIN")
-   password = os.getenv("LEEKWARS_PASSWORD")
-   ```
-
-3. Study AI code:
-   ```bash
-   # Main AI logic
-   cat tagadalive/AI/AI
-   # Scoring system (modular architecture)
-   cat tagadalive/AI/ScoringConfig   # Constants and weights
-   cat tagadalive/AI/Scoring         # Façade and caches
-   cat tagadalive/AI/BattleState     # Per-turn team state
-   # Static analysis issues
-   cat tagadalive/TODO.md
-   ```
-
-4. Sync AI code to/from LeekWars:
-   ```bash
-   # List AI files on account
-   python -m src.tools.aisync list
-   # Upload a file
-   python -m src.tools.aisync put <ai_id> tagadalive/<path>
-   # Download a file
-   python -m src.tools.aisync get <ai_id> -o tagadalive/<path>
-   ```
-
-5. Test AI changes:
-   ```bash
-   # Run FREE test fight vs Domingo
-   python -m src.tools.fight
-   ```
-
-## TODO / Roadmap
+### TODO / Roadmap
 
 - [x] Fight history database (`src/scraper/`)
 - [x] Analysis dashboard (`src/dashboard/`)
@@ -762,3 +852,15 @@ This ensures hard-won knowledge is preserved and the project improves with each 
 - [ ] AI code generator (template-based)
 - [ ] Learning loop orchestrator
 - [ ] Advanced: LLM-assisted code improvement
+
+---
+
+## Key Resources
+
+- **[docs/LEEKWARS_API.md](docs/LEEKWARS_API.md)** - Complete local API reference (use this first!)
+- [LeekWars Official](https://leekwars.com/)
+- [API Documentation](https://leekwars.com/help/api)
+- [LeekScript Docs](https://leekwars.com/help/documentation)
+- [LeekWars GitHub](https://github.com/leek-wars)
+- [Fight Generator](https://github.com/leek-wars/leek-wars-generator)
+- [Community API Docs](https://github.com/LeBezout/LEEK-WARS)
