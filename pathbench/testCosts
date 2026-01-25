@@ -1,0 +1,391 @@
+// LeekScript Operation Cost Verification v2
+// Tests O(n) scaling and isolates base overhead
+
+global testsDone = false
+
+if (!testsDone) {
+    debug("=== LEEKSCRIPT OPERATION COSTS v2 ===")
+    debug("")
+
+    // ============ BASIC OPERATIONS ============
+    debug("--- Basic Operations (raw) ---")
+
+    var x = 0
+    var a = 5
+    var b = 3
+
+    var before = getOperations()
+    x = a + b
+    debug("addition: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a - b
+    debug("subtraction: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a * b
+    debug("multiplication: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a / b
+    debug("division: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a % b
+    debug("modulo: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a ** b
+    debug("power: " + (getOperations() - before))
+
+    debug("")
+    debug("--- Bitwise Operations ---")
+
+    before = getOperations()
+    x = a & b
+    debug("AND &: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a | b
+    debug("OR |: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a ^ b
+    debug("XOR ^: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a << 2
+    debug("left shift <<: " + (getOperations() - before))
+
+    before = getOperations()
+    x = a >> 2
+    debug("right shift >>: " + (getOperations() - before))
+
+    before = getOperations()
+    x = ~a
+    debug("NOT ~: " + (getOperations() - before))
+
+    debug("")
+    debug("--- Bit Functions ---")
+
+    var num = 0b10110100
+    before = getOperations()
+    x = bitCount(num)
+    debug("bitCount: " + (getOperations() - before))
+
+    before = getOperations()
+    x = trailingZeros(num)
+    debug("trailingZeros: " + (getOperations() - before))
+
+    before = getOperations()
+    x = leadingZeros(num)
+    debug("leadingZeros: " + (getOperations() - before))
+
+    // ============ ARRAY OPERATIONS ============
+    debug("")
+    debug("--- Array Operations ---")
+
+    var arr = [1, 2, 3, 4, 5]
+
+    before = getOperations()
+    x = arr[2]
+    debug("array read: " + (getOperations() - before))
+
+    before = getOperations()
+    arr[2] = 99
+    debug("array write: " + (getOperations() - before))
+
+    before = getOperations()
+    push(arr, 6)
+    debug("push: " + (getOperations() - before))
+
+    before = getOperations()
+    x = pop(arr)
+    debug("pop: " + (getOperations() - before))
+
+    before = getOperations()
+    x = count(arr)
+    debug("count: " + (getOperations() - before))
+
+    var arr2 = [7, 8, 9]
+    before = getOperations()
+    var merged = arrayConcat(arr, arr2)
+    debug("arrayConcat (5+3): " + (getOperations() - before))
+
+    before = getOperations()
+    x = inArray(arr, 3)
+    debug("inArray (found): " + (getOperations() - before))
+
+    before = getOperations()
+    x = inArray(arr, 999)
+    debug("inArray (not found, 5 elem): " + (getOperations() - before))
+
+    // ============ SET OPERATIONS - O(n) CHECK ============
+    debug("")
+    debug("--- Set Operations (size scaling) ---")
+
+    // Small sets (3 elements)
+    var set3a = arrayToSet([1, 2, 3])
+    var set3b = arrayToSet([3, 4, 5])
+
+    before = getOperations()
+    var u3 = setUnion(set3a, set3b)
+    debug("setUnion (3+3): " + (getOperations() - before))
+
+    before = getOperations()
+    var d3 = setDifference(set3a, set3b)
+    debug("setDifference (3+3): " + (getOperations() - before))
+
+    before = getOperations()
+    var i3 = setIntersection(set3a, set3b)
+    debug("setIntersection (3+3): " + (getOperations() - before))
+
+    // Medium sets (10 elements)
+    var set10a = arrayToSet([1,2,3,4,5,6,7,8,9,10])
+    var set10b = arrayToSet([6,7,8,9,10,11,12,13,14,15])
+
+    before = getOperations()
+    var u10 = setUnion(set10a, set10b)
+    debug("setUnion (10+10): " + (getOperations() - before))
+
+    before = getOperations()
+    var d10 = setDifference(set10a, set10b)
+    debug("setDifference (10+10): " + (getOperations() - before))
+
+    before = getOperations()
+    var i10 = setIntersection(set10a, set10b)
+    debug("setIntersection (10+10): " + (getOperations() - before))
+
+    // Large sets (50 elements)
+    var arr50a = []
+    var arr50b = []
+    for (var i = 0; i < 50; i++) { push(arr50a, i) }
+    for (var i = 25; i < 75; i++) { push(arr50b, i) }
+    var set50a = arrayToSet(arr50a)
+    var set50b = arrayToSet(arr50b)
+
+    before = getOperations()
+    var u50 = setUnion(set50a, set50b)
+    debug("setUnion (50+50): " + (getOperations() - before))
+
+    before = getOperations()
+    var d50 = setDifference(set50a, set50b)
+    debug("setDifference (50+50): " + (getOperations() - before))
+
+    before = getOperations()
+    var i50 = setIntersection(set50a, set50b)
+    debug("setIntersection (50+50): " + (getOperations() - before))
+
+    debug("")
+    debug("--- Set Basic Operations ---")
+
+    var testSet = arrayToSet([1, 2, 3])
+    before = getOperations()
+    setPut(testSet, 10)
+    debug("setPut: " + (getOperations() - before))
+
+    before = getOperations()
+    x = setContains(testSet, 2)
+    debug("setContains (found): " + (getOperations() - before))
+
+    before = getOperations()
+    x = setContains(testSet, 999)
+    debug("setContains (not found): " + (getOperations() - before))
+
+    // ============ CONVERSIONS - O(n) CHECK ============
+    debug("")
+    debug("--- Conversions (size scaling) ---")
+
+    var arr3 = [1, 2, 3]
+    var arr10 = [1,2,3,4,5,6,7,8,9,10]
+
+    before = getOperations()
+    var s3 = arrayToSet(arr3)
+    debug("arrayToSet (3): " + (getOperations() - before))
+
+    before = getOperations()
+    var s10 = arrayToSet(arr10)
+    debug("arrayToSet (10): " + (getOperations() - before))
+
+    before = getOperations()
+    var s50 = arrayToSet(arr50a)
+    debug("arrayToSet (50): " + (getOperations() - before))
+
+    before = getOperations()
+    var a3 = setToArray(set3a)
+    debug("setToArray (3): " + (getOperations() - before))
+
+    before = getOperations()
+    var a10 = setToArray(set10a)
+    debug("setToArray (10): " + (getOperations() - before))
+
+    before = getOperations()
+    var a50 = setToArray(set50a)
+    debug("setToArray (50): " + (getOperations() - before))
+
+    // Intervals
+    before = getOperations()
+    var int5 = intervalToArray([1..5])
+    debug("intervalToArray (5): " + (getOperations() - before))
+
+    before = getOperations()
+    var int20 = intervalToArray([1..20])
+    debug("intervalToArray (20): " + (getOperations() - before))
+
+    before = getOperations()
+    var int50 = intervalToArray([1..50])
+    debug("intervalToArray (50): " + (getOperations() - before))
+
+    // ============ CONTROL FLOW ============
+    debug("")
+    debug("--- Control Flow ---")
+
+    var cond = true
+    before = getOperations()
+    if (cond) { x = 1 }
+    debug("if true {assign}: " + (getOperations() - before))
+
+    cond = false
+    before = getOperations()
+    if (cond) { x = 1 }
+    debug("if false {skip}: " + (getOperations() - before))
+
+    cond = true
+    before = getOperations()
+    x = cond ? 1 : 0
+    debug("ternary (true): " + (getOperations() - before))
+
+    cond = false
+    before = getOperations()
+    x = cond ? 1 : 0
+    debug("ternary (false): " + (getOperations() - before))
+
+    // ============ LOOPS ============
+    debug("")
+    debug("--- Loops (10 iterations, no body work) ---")
+
+    before = getOperations()
+    for (var v in arr10) { }
+    debug("for-in array (10): " + (getOperations() - before))
+
+    before = getOperations()
+    for (var i = 0; i < 10; i++) { }
+    debug("for indexed (10): " + (getOperations() - before))
+
+    var j = 0
+    before = getOperations()
+    while (j < 10) { j++ }
+    debug("while (10): " + (getOperations() - before))
+
+    debug("")
+    debug("--- Loops (with array access) ---")
+
+    var sum = 0
+    before = getOperations()
+    for (var v in arr10) { sum += v }
+    debug("for-in + sum (10): " + (getOperations() - before))
+
+    sum = 0
+    before = getOperations()
+    for (var i = 0; i < 10; i++) { sum += arr10[i] }
+    debug("for indexed + arr[i] + sum (10): " + (getOperations() - before))
+
+    // Map iteration
+    var map3 = [1: "a", 2: "b", 3: "c"]
+    var map10 = [1:"a",2:"b",3:"c",4:"d",5:"e",6:"f",7:"g",8:"h",9:"i",10:"j"]
+
+    before = getOperations()
+    for (var k : var v in map3) { }
+    debug("for k:v in map (3): " + (getOperations() - before))
+
+    before = getOperations()
+    for (var k : var v in map10) { }
+    debug("for k:v in map (10): " + (getOperations() - before))
+
+    // ============ MAP OPERATIONS ============
+    debug("")
+    debug("--- Map Operations ---")
+
+    var map5 = [1: "a", 2: "b", 3: "c", 4: "d", 5: "e"]
+
+    before = getOperations()
+    x = map5[3]
+    debug("map read: " + (getOperations() - before))
+
+    before = getOperations()
+    map5[3] = "z"
+    debug("map write: " + (getOperations() - before))
+
+    before = getOperations()
+    map5[99] = "new"
+    debug("map insert: " + (getOperations() - before))
+
+    before = getOperations()
+    x = mapSize(map5)
+    debug("mapSize (6): " + (getOperations() - before))
+
+    before = getOperations()
+    var keys = mapKeys(map5)
+    debug("mapKeys (6): " + (getOperations() - before))
+
+    before = getOperations()
+    var vals = mapValues(map5)
+    debug("mapValues (6): " + (getOperations() - before))
+
+    before = getOperations()
+    x = (map5[999] != null)
+    debug("map contains check: " + (getOperations() - before))
+
+    // Larger map
+    var map50 = [:]
+    for (var i = 0; i < 50; i++) { map50[i] = "v" + i }
+
+    before = getOperations()
+    var keys50 = mapKeys(map50)
+    debug("mapKeys (50): " + (getOperations() - before))
+
+    before = getOperations()
+    var vals50 = mapValues(map50)
+    debug("mapValues (50): " + (getOperations() - before))
+
+    before = getOperations()
+    x = mapSize(map50)
+    debug("mapSize (50): " + (getOperations() - before))
+
+    // ============ FUNCTION CALLS ============
+    debug("")
+    debug("--- Function Call Overhead ---")
+
+    before = getOperations()
+    abs(-5)
+    debug("abs(): " + (getOperations() - before))
+
+    before = getOperations()
+    min(3, 5)
+    debug("min(): " + (getOperations() - before))
+
+    before = getOperations()
+    max(3, 5)
+    debug("max(): " + (getOperations() - before))
+
+    before = getOperations()
+    floor(3.7)
+    debug("floor(): " + (getOperations() - before))
+
+    before = getOperations()
+    ceil(3.2)
+    debug("ceil(): " + (getOperations() - before))
+
+    before = getOperations()
+    round(3.5)
+    debug("round(): " + (getOperations() - before))
+
+    before = getOperations()
+    sqrt(16)
+    debug("sqrt(): " + (getOperations() - before))
+
+    debug("")
+    debug("=== END COSTS v2 ===")
+
+    testsDone = true
+}
