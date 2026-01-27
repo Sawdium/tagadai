@@ -79,9 +79,9 @@ python -m src.tools.fight --scenario 37772
 # Main AI logic
 cat tagadalive/AI/AI
 # Scoring system (modular architecture)
-cat tagadalive/AI/ScoringConfig   # Constants and weights
-cat tagadalive/AI/Scoring         # Façade and caches
-cat tagadalive/AI/BattleState     # Per-turn team state
+cat tagadalive/HiddenKnowledges/ScoringConfig   # Constants and weights (private)
+cat tagadalive/HiddenKnowledges/Scoring         # Façade and caches (private)
+cat tagadalive/Controlers/BattleState           # Per-turn team state
 # Static analysis issues
 cat tagadalive/TODO.md
 ```
@@ -425,7 +425,8 @@ When a test fight crashes or shows "AI has ERRORS", do NOT assume it's an operat
   - `BeamSearch` - Multi-path beam search
   - `UnifiedMCTS` - Single tree with cells as first-level nodes
   - `Hybrid` - Combined modes (PTS + MCTS/Beam)
-- `AI/Scoring` - Façade for action scoring: caches, getDynamicCoef, getEffectiveDuration
+- `HiddenKnowledges/` - Scoring system (private repo with real weights)
+- `Controlers/BattleState` - Per-turn team state
 - `Model/` - Entity, Item, Cell, Action, Combo classes
 - `Controlers/Maps/` - Pathfinding, danger maps, action generation
 - `Services/Damages` - Damage calculation with shields/erosion
@@ -453,21 +454,24 @@ See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) for detailed algorithm documentatio
 Modular, ML-tunable scoring system:
 
 ```
-AI/
+HiddenKnowledges/     # Private repo - real weights (public repo has placeholders)
 ├── ScoringConfig     # ML-tunable constants: weights, thresholds, duration tables
-├── EntityTypes       # Bulb type detection (BULB_FIRE, BULB_HEALER, etc.)
 ├── EntityCoefs       # Base coefficient tables per entity type
-├── BattleState       # Per-turn team state: composition, flags, ratios, danger
 ├── ScoringModifiers  # Pure modifier functions (lifeRatio, levelRatio, etc.)
 └── Scoring           # Façade: caches, getDynamicCoef(), getEffectiveDuration()
+
+Controlers/
+└── BattleState       # Per-turn team state: composition, flags, ratios, danger
 ```
 
 - **ScoringConfig**: All tunable constants (KILL_VALUE, W_DANGER_*, duration_mitigation maps)
-- **EntityTypes**: Extended entity types for bulbs (101-108), cached in Entity.extendedType
 - **EntityCoefs**: `baseCoefs[entityType][stat]` lookup tables
 - **BattleState**: Team composition (countFire, countHealer...), flags (enemyHasStr), ratios
 - **ScoringModifiers**: Stateless functions (getLifeRatioModifier, getWinningModifier, etc.)
 - **Scoring**: Orchestrates refresh(), provides getDynamicCoef() with all modifiers applied
+
+> **Note**: The public tagadalive repo contains placeholder scoring files with neutral values.
+> Real weights are in the private `HiddenKnowledges` repo. See `HiddenKnowledges/README.md` for setup.
 
 ### LeekScript v4 Features Used
 

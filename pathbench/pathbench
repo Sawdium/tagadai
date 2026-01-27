@@ -6,6 +6,9 @@ global run12, run5, run0, jump12, jump5, jump0, tp12, tp5, tp0, jumpTp12, jumpTp
 
 // Coordinate lookup: CELLS_XY[x][y] = cell_id (mirrors Board.cellsXY)
 global CELLS_XY = [:]
+// Reverse lookup: CELL_X[cell], CELL_Y[cell] = coordinates (cached)
+global CELL_X = [:]
+global CELL_Y = [:]
 // Neighbor lookup: NEIGHBORS[cell_id] = [array of neighbor cell_ids] (mirrors Cell.neighborsObstacles)
 global NEIGHBORS = [:]  // Use Map, not Array!
 // Jump destinations: JUMP_DESTS[cell_id] = [array of cells at distance 1-3, excluding obstacles]
@@ -13,82 +16,76 @@ global JUMP_DESTS = [:]
 // Teleport destinations: TELEPORT_DESTS[cell_id] = [array of cells at distance 1-12, excluding obstacles]
 // Note: teleport goes THROUGH obstacles but lands on non-obstacle cells
 global TELEPORT_DESTS = [:]
+// Obstacle cache: IS_OBSTACLE[cell] = true/false (precomputed)
+global IS_OBSTACLE = [:]
+// Non-obstacle set for fast setContains (5 ops vs 6 for map+negation)
+global NON_OBSTACLE_SET
 global CACHE_INITIALIZED = false
 
 function initCache() {
     if (CACHE_INITIALIZED) return;
 
-    // Phase 1: Initialize coordinate lookup map (same as Board.init)
+    // Phase 1: Initialize coordinate lookup map, cache coordinates and obstacles
+    var nonObstacleCells = []
     for (var x = -31; x <= 31; x++) {
         CELLS_XY[x] = [:]
     }
     for (var cell = 0; cell < 613; cell++) {
         var x = getCellX(cell)!
         var y = getCellY(cell)!
+        CELL_X[cell] = x
+        CELL_Y[cell] = y
         CELLS_XY[x][y] = cell
+        var obs = isObstacle(cell)
+        IS_OBSTACLE[cell] = obs
+        if (!obs) push(nonObstacleCells, cell)
     }
+    NON_OBSTACLE_SET = arrayToSet(nonObstacleCells)
 
     // Phase 2: Build neighbor lists (same as Cell.initNeighbors - excluding obstacles)
     for (var cell = 0; cell < 613; cell++) {
-        var x = getCellX(cell)!
-        var y = getCellY(cell)!
+        var x = CELL_X[cell]
+        var y = CELL_Y[cell]
         var neighbors = []
 
         // 4 cardinal directions in coordinate space, excluding walls
         var n = CELLS_XY[x][y - 1]
-        if (n != null && !isObstacle(n)) push(neighbors, n)
+        if (n != null && setContains(NON_OBSTACLE_SET, n)) push(neighbors, n)
         n = CELLS_XY[x][y + 1]
-        if (n != null && !isObstacle(n)) push(neighbors, n)
+        if (n != null && setContains(NON_OBSTACLE_SET, n)) push(neighbors, n)
         n = CELLS_XY[x - 1][y]
-        if (n != null && !isObstacle(n)) push(neighbors, n)
+        if (n != null && setContains(NON_OBSTACLE_SET, n)) push(neighbors, n)
         n = CELLS_XY[x + 1][y]
-        if (n != null && !isObstacle(n)) push(neighbors, n)
+        if (n != null && setContains(NON_OBSTACLE_SET, n)) push(neighbors, n)
 
         NEIGHBORS[cell] = neighbors
     }
 
-    // Phase 3: Build jump destination lists (cells at distance 1-3, excluding obstacles)
-    // Uses coordinate math to only check nearby cells (7x7 grid = 49 cells instead of 613)
-    for (var cell = 0; cell < 613; cell++) {
-        if (isObstacle(cell)) continue
+    // Phase 3: Build jump destination lists using getChipEffectiveArea trick
+    // CHIP_RAGE has AOE3 which matches jump range exactly
+    for (var cell in nonObstacleCells) {
         var dests = []
-        var cx = getCellX(cell)!
-        var cy = getCellY(cell)!
-
-        // Check cells within coordinate range [-3, 3] in each direction
-        for (var dx = -3; dx <= 3; dx++) {
-            for (var dy = -3; dy <= 3; dy++) {
-                if (dx == 0 && dy == 0) continue
-                var dist = abs(dx) + abs(dy)  // Manhattan distance = cell distance
-                if (dist >= 1 && dist <= 3) {
-                    var c = CELLS_XY[cx + dx][cy + dy]
-                    if (c != null && !isObstacle(c)) {
-                        push(dests, c)
-                    }
-                }
-            }
+        for (var dest in getChipEffectiveArea(CHIP_RAGE, cell)) {
+            if (dest != cell && setContains(NON_OBSTACLE_SET, dest)) push(dests, dest)
         }
         JUMP_DESTS[cell] = dests
     }
 
     // Phase 4: Build teleport destination lists (cells at distance 1-12, excluding obstacles)
-    // Uses coordinate math to only check nearby cells (25x25 grid instead of 613)
-    for (var cell = 0; cell < 613; cell++) {
-        if (isObstacle(cell)) continue
+    // Diamond iteration: only check valid positions (337 instead of 625)
+    for (var cell in nonObstacleCells) {
         var dests = []
-        var cx = getCellX(cell)!
-        var cy = getCellY(cell)!
+        var cx = CELL_X[cell]
+        var cy = CELL_Y[cell]
 
-        // Check cells within coordinate range [-12, 12] in each direction
         for (var dx = -12; dx <= 12; dx++) {
-            for (var dy = -12; dy <= 12; dy++) {
+            var adx = abs(dx)
+            var maxDy = 12 - adx
+            for (var dy = -maxDy; dy <= maxDy; dy++) {
                 if (dx == 0 && dy == 0) continue
-                var dist = abs(dx) + abs(dy)  // Manhattan distance = cell distance
-                if (dist >= 1 && dist <= 12) {
-                    var c = CELLS_XY[cx + dx][cy + dy]
-                    if (c != null && !isObstacle(c)) {
-                        push(dests, c)
-                    }
+                var c = CELLS_XY[cx + dx][cy + dy]
+                if (c != null && setContains(NON_OBSTACLE_SET, c)) {
+                    push(dests, c)
                 }
             }
         }
@@ -208,32 +205,25 @@ function bench(label, pathFunc, startCell, mp, reference){
 }
 
 /**
- * Returns neighbors of a cell (cells at distance 1) - uses precomputed cache
- */
-function getNeighbors(cell) {
-    return NEIGHBORS[cell]
-}
-
-/**
  * BFS to get all cells reachable by walking
  * @return Map<cell, distance>
  */
 function getWalkReachable(fromCell, mp) {
     var visited = [fromCell: 0]
-    var current = [fromCell: 0]
-    var next
+    var frontier = [fromCell]
 
-    while (mp-- > 0) {
-        next = [:]
-        for (var cell: var dist in current) {
-            for (var neighbor in getNeighbors(cell)) {
+    for (var cost = 0; cost < mp; cost++) {
+        var nextCost = cost + 1
+        var nextFrontier = []
+        for (var cell in frontier) {
+            for (var neighbor in NEIGHBORS[cell]) {
                 if (visited[neighbor] == null) {
-                    visited[neighbor] = dist + 1
-                    next[neighbor] = dist + 1
+                    visited[neighbor] = nextCost
+                    push(nextFrontier, neighbor)
                 }
             }
         }
-        current = next
+        frontier = nextFrontier
     }
 
     return visited
@@ -262,33 +252,27 @@ function runJumpCells(fromCell, MP){
     var frontierUsed = []
 
     for (var cost = 0; cost <= MP; cost++) {
-        // First, process all jumps from canJump frontier (jump is free, same cost)
-        var jumpedThisTurn = []
+        // Process all jumps from canJump frontier (jump is free, same cost)
         for (var cell in frontierCan) {
-            var dests = JUMP_DESTS[cell]
-            if (dests != null) {
-                for (var jd in dests) {
-                    if (usedJump[jd] == null) {
-                        usedJump[jd] = cost
-                        push(jumpedThisTurn, jd)
-                    }
+            for (var jd in JUMP_DESTS[cell]) {
+                if (usedJump[jd] == null) {
+                    usedJump[jd] = cost
+                    push(frontierUsed, jd)
                 }
             }
         }
-
-        // Merge jumped cells into current usedJump frontier (they can walk this turn)
-        pushAll(frontierUsed, jumpedThisTurn)
 
         // Now process walking from both frontiers (costs 1 MP)
         var nextFrontierCan = []
         var nextFrontierUsed = []
 
         if (cost < MP) {
+            var nextCost = cost + 1
             // Walk from canJump frontier
             for (var cell in frontierCan) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (canJump[n] == null) {
-                        canJump[n] = cost + 1
+                        canJump[n] = nextCost
                         push(nextFrontierCan, n)
                     }
                 }
@@ -296,9 +280,9 @@ function runJumpCells(fromCell, MP){
 
             // Walk from usedJump frontier
             for (var cell in frontierUsed) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (usedJump[n] == null) {
-                        usedJump[n] = cost + 1
+                        usedJump[n] = nextCost
                         push(nextFrontierUsed, n)
                     }
                 }
@@ -310,12 +294,12 @@ function runJumpCells(fromCell, MP){
     }
 
     // Merge results: cell is reachable if in canJump OR usedJump
-    var result = [:]
-    for (var c: var d in canJump) result[c] = d
+    // Reuse canJump as result to avoid copy
     for (var c: var d in usedJump) {
-        if (result[c] == null || d < result[c]) result[c] = d
+        var existing = canJump[c]
+        if (existing == null || d < existing) canJump[c] = d
     }
-    return result
+    return canJump
 }
 
 /**
@@ -332,41 +316,36 @@ function runTeleportationCells(fromCell, MP){
     var frontierUsed = []
 
     for (var cost = 0; cost <= MP; cost++) {
-        // First, process all teleports from canTeleport frontier (teleport is free)
-        var teleportedThisTurn = []
+        // Process all teleports from canTeleport frontier (teleport is free)
+        // Push directly to frontierUsed to avoid O(n) pushAll
         for (var cell in frontierCan) {
-            var dests = TELEPORT_DESTS[cell]
-            if (dests != null) {
-                for (var td in dests) {
-                    if (usedTeleport[td] == null) {
-                        usedTeleport[td] = cost
-                        push(teleportedThisTurn, td)
-                    }
+            for (var td in TELEPORT_DESTS[cell]) {
+                if (usedTeleport[td] == null) {
+                    usedTeleport[td] = cost
+                    push(frontierUsed, td)
                 }
             }
         }
-
-        // Merge teleported cells into current usedTeleport frontier
-        pushAll(frontierUsed, teleportedThisTurn)
 
         // Process walking from both frontiers (costs 1 MP)
         var nextFrontierCan = []
         var nextFrontierUsed = []
 
         if (cost < MP) {
+            var nextCost = cost + 1
             for (var cell in frontierCan) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (canTeleport[n] == null) {
-                        canTeleport[n] = cost + 1
+                        canTeleport[n] = nextCost
                         push(nextFrontierCan, n)
                     }
                 }
             }
 
             for (var cell in frontierUsed) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (usedTeleport[n] == null) {
-                        usedTeleport[n] = cost + 1
+                        usedTeleport[n] = nextCost
                         push(nextFrontierUsed, n)
                     }
                 }
@@ -377,13 +356,12 @@ function runTeleportationCells(fromCell, MP){
         frontierUsed = nextFrontierUsed
     }
 
-    // Merge results
-    var result = [:]
-    for (var c: var d in canTeleport) result[c] = d
+    // Merge results: reuse canTeleport as result to avoid copy
     for (var c: var d in usedTeleport) {
-        if (result[c] == null || d < result[c]) result[c] = d
+        var existing = canTeleport[c]
+        if (existing == null || d < existing) canTeleport[c] = d
     }
-    return result
+    return canTeleport
 }
 
 /**
@@ -408,69 +386,45 @@ function runJumpTeleportationCells(fromCell, MP){
     var frontier3 = []
 
     for (var cost = 0; cost <= MP; cost++) {
-        // Step 1: Direct abilities from state0
-        var newState1 = []  // from state0 via jump
-        var newState2 = []  // from state0 via teleport
-
+        // Step 1: Direct abilities from state0, push directly to frontiers
         for (var cell in frontier0) {
             // Jump transitions (state0 → state1)
-            var jdests = JUMP_DESTS[cell]
-            if (jdests != null) {
-                for (var jd in jdests) {
-                    if (state1[jd] == null) {
-                        state1[jd] = cost
-                        push(newState1, jd)
-                    }
+            for (var jd in JUMP_DESTS[cell]) {
+                if (state1[jd] == null) {
+                    state1[jd] = cost
+                    push(frontier1, jd)
                 }
             }
             // Teleport transitions (state0 → state2)
-            var tdests = TELEPORT_DESTS[cell]
-            if (tdests != null) {
-                for (var td in tdests) {
-                    if (state2[td] == null) {
-                        state2[td] = cost
-                        push(newState2, td)
-                    }
+            for (var td in TELEPORT_DESTS[cell]) {
+                if (state2[td] == null) {
+                    state2[td] = cost
+                    push(frontier2, td)
                 }
             }
         }
 
-        // Step 2: Push direct ability cells to frontiers BEFORE chaining
-        // This ensures just-jumped cells can teleport, and just-teleported cells can jump
-        pushAll(frontier1, newState1)
-        pushAll(frontier2, newState2)
-
-        // Step 3: Chained abilities (now frontiers include just-added cells)
-        var newState3 = []
-
+        // Step 2: Chained abilities - process ALL cells in frontier1/frontier2
+        // (includes both walked cells and newly jumped cells)
         // From state1: can teleport (→state3)
         for (var cell in frontier1) {
-            var tdests = TELEPORT_DESTS[cell]
-            if (tdests != null) {
-                for (var td in tdests) {
-                    if (state3[td] == null) {
-                        state3[td] = cost
-                        push(newState3, td)
-                    }
+            for (var td in TELEPORT_DESTS[cell]) {
+                if (state3[td] == null) {
+                    state3[td] = cost
+                    push(frontier3, td)
                 }
             }
         }
 
         // From state2: can jump (→state3)
         for (var cell in frontier2) {
-            var jdests = JUMP_DESTS[cell]
-            if (jdests != null) {
-                for (var jd in jdests) {
-                    if (state3[jd] == null) {
-                        state3[jd] = cost
-                        push(newState3, jd)
-                    }
+            for (var jd in JUMP_DESTS[cell]) {
+                if (state3[jd] == null) {
+                    state3[jd] = cost
+                    push(frontier3, jd)
                 }
             }
         }
-
-        // Push chained cells to frontier3
-        pushAll(frontier3, newState3)
 
         // Process walking from all frontiers (costs 1 MP)
         var nextFrontier0 = []
@@ -479,34 +433,35 @@ function runJumpTeleportationCells(fromCell, MP){
         var nextFrontier3 = []
 
         if (cost < MP) {
+            var nextCost = cost + 1
             for (var cell in frontier0) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (state0[n] == null) {
-                        state0[n] = cost + 1
+                        state0[n] = nextCost
                         push(nextFrontier0, n)
                     }
                 }
             }
             for (var cell in frontier1) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (state1[n] == null) {
-                        state1[n] = cost + 1
+                        state1[n] = nextCost
                         push(nextFrontier1, n)
                     }
                 }
             }
             for (var cell in frontier2) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (state2[n] == null) {
-                        state2[n] = cost + 1
+                        state2[n] = nextCost
                         push(nextFrontier2, n)
                     }
                 }
             }
             for (var cell in frontier3) {
-                for (var n in getNeighbors(cell)) {
+                for (var n in NEIGHBORS[cell]) {
                     if (state3[n] == null) {
-                        state3[n] = cost + 1
+                        state3[n] = nextCost
                         push(nextFrontier3, n)
                     }
                 }
@@ -519,17 +474,18 @@ function runJumpTeleportationCells(fromCell, MP){
         frontier3 = nextFrontier3
     }
 
-    // Merge all states: cell is reachable if in any state
-    var result = [:]
-    for (var c: var d in state0) result[c] = d
+    // Merge all states: reuse state0 as result to avoid copy
     for (var c: var d in state1) {
-        if (result[c] == null || d < result[c]) result[c] = d
+        var existing = state0[c]
+        if (existing == null || d < existing) state0[c] = d
     }
     for (var c: var d in state2) {
-        if (result[c] == null || d < result[c]) result[c] = d
+        var existing = state0[c]
+        if (existing == null || d < existing) state0[c] = d
     }
     for (var c: var d in state3) {
-        if (result[c] == null || d < result[c]) result[c] = d
+        var existing = state0[c]
+        if (existing == null || d < existing) state0[c] = d
     }
-    return result
+    return state0
 }

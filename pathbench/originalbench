@@ -1,0 +1,125 @@
+global CUMUL_COUT_TOTAL = 0;
+global CUMUL_COUT_CE_TOUR;
+CUMUL_COUT_CE_TOUR = 0;
+global SUMMARY = "";
+global run12, run5, run0, jump12, jump5, jump0, tp12, tp5, tp0, jumpTp12, jumpTp5, jumpTp0;
+
+// Vos codes d'initialisation peuvent être placés ici, ou directement exécutés dans les includes
+
+saveOpe("Initialisation tour " + getTurn(), getOperations());
+if(getTurn()==1){ // Cases accessibles sans puces
+    initReferences();
+    bench('Cases accessibles depuis la cellule 457 avec 12 MP', runOnlyCells, 457, 12, run12);
+    bench('Cases accessibles depuis la cellule 457 avec 5 MP', runOnlyCells, 457, 5, run5);
+    bench('Cases accessibles depuis la cellule 457 avec 0 MP', runOnlyCells, 457, 0, run0);
+}
+if(getTurn()==2){ // Cases accessibles avec saut
+    bench('Cases accessibles depuis la cellule 439 avec 12 MP + Saut', runJumpCells , 439, 12, jump12);
+    bench('Cases accessibles depuis la cellule 439 avec 5 MP + Saut', runJumpCells , 439, 5, jump5);
+    bench('Cases accessibles depuis la cellule 439 avec 0 MP + Saut', runJumpCells , 439, 0, jump0);
+}
+if(getTurn()==3){ // Cases accessibles avec téléportation   
+    bench('Cases accessibles depuis la cellule 421 avec 12 MP + Téléportation', runTeleportationCells , 421, 12, tp12);
+    bench('Cases accessibles depuis la cellule 421 avec 5 MP + Téléportation', runTeleportationCells , 421, 5, tp5);
+    bench('Cases accessibles depuis la cellule 421 avec 0 MP + Téléportation', runTeleportationCells , 421, 0, tp0);
+}
+if(getTurn()==4){ // Cases accessibles avec saut et téléportation   
+    bench('Cases accessibles depuis la cellule 403 avec 12 MP + Saut + Téléportation', runJumpTeleportationCells , 403, 12, jumpTp12);
+    bench('Cases accessibles depuis la cellule 403 avec 5 MP + Saut + Téléportation', runJumpTeleportationCells , 403, 5, jumpTp5);
+    bench('Cases accessibles depuis la cellule 403 avec 0 MP + Saut + Téléportation', runJumpTeleportationCells , 403, 0, jumpTp0);
+}
+
+say("Opérations cumulées ce tour : " + CUMUL_COUT_CE_TOUR);
+SUMMARY += "Opération tour " + getTurn() + " : " + CUMUL_COUT_CE_TOUR + "\n";
+say("Opérations cumulées au total : " + CUMUL_COUT_TOTAL);
+if (getTurn() == 4) {
+    SUMMARY += "Opérations totales : " + CUMUL_COUT_TOTAL;
+    debug(SUMMARY);
+    pause();
+}
+
+function initReferences(){
+    run12 = binToCells([0,0,0,279223176896970752,8070586872142759808,16888628525916163,918742501634343146,-1152820349033763968,71776391793205249,133693948]);
+    run5 = binToCells([0,0,0,0,0,1125899906842624,54043676568453130,-1152890718046387328,32212377600,0]);
+    run0 = binToCells([0,0,0,0,0,0,0,512,0,0]);
+    jump12 = binToCells([0,0,17873661021126656,3449766041984696444,8072557209864636288,142990380168634399,2071672802501986282,-1148879684327347328,143834260711137305,536348668]);
+    jump5 = binToCells([0,0,0,0,8070586871689773056,16888559806439425,918738103587831914,-1152820349033772160,17733058824757249,252]);
+    jump0 = binToCells([0,0,0,0,0,0,54043676568453130,30786560459648,0,0]);
+    tp12 = binToCells([-5304695447839031489,-540442881932724095,2305711056074305783,-1161365818354417796,8088319997539452807,2304734694006055039,2072657966531117034,-1090332631471527033,4467305296258654521,8589441020]);
+    tp5 = binToCells([0,-576460752303423488,143975538292158487,8061513633264568188,8074809009678387072,287105568244490271,2071672802501986282,-1148879667147478144,143834260711137337,536348668]);
+    tp0 = binToCells([0,0,0,1143923032771002368,8070868347119470464,34903164474875911,2071672802367767018,-1152257396932842624,71776391793205249,133693948]);
+    jumpTp12 = binToCells([-5304695445691531457,-504414084912711547,4611562861448131063,-1160802864106012804,8088319997540501391,4610595295472902271,2073783870732959722,-1090332356591522929,9079008907006305081,17179408380]);
+    jumpTp5 = binToCells([3918131675812331520,-571968113684187008,288091825883836471,-1161788034577592452,8079312626485757824,575337043916218431,2071672803038859242,-1144376033160238207,432066835894493241,1073223676]);
+    jumpTp0 = binToCells([0,0,71916982178410496,3449774838144827772,8071431301367859072,70932236372795407,2071672802367767530,-1151131492731032704,143834260711137289,267912188]);
+}
+
+function binToCells(d){
+    var i=0;
+    var j=0;
+    var m=[:];
+    for (var c=0; c<613; c++){
+        if (d[i] & 1<<j) m[c] = c;
+        j++;
+        if (j>63) {j=0;i++;}
+    }
+    return m;
+}
+
+function saveOpe(label, newOpe){
+    var str = label + " -> opérations : " + newOpe;
+    debug(str);
+    SUMMARY += str + "\n";
+    CUMUL_COUT_CE_TOUR += newOpe;
+    CUMUL_COUT_TOTAL += newOpe;
+}
+
+function checkResult(resultList, referenceList){
+    clearMarks();
+    mark(mapKeys(referenceList), getColor(255, 255, 0));
+    for (var cell in resultList){
+        if (referenceList[cell] != null) mark(cell, COLOR_GREEN);
+        else mark(cell, COLOR_RED);
+    }
+}
+
+function bench(label, pathFunc, startCell, mp, reference){
+    var opeBefore = getOperations();
+    var cellList = pathFunc(startCell, mp);
+    var newOpe = getOperations() - opeBefore;
+    if (typeOf(cellList) == TYPE_MAP) cellList = mapKeys(cellList);
+    checkResult(cellList, reference);
+    saveOpe(label, newOpe);
+    pause();
+}
+
+/**
+ * Fonction à compléter. Elle renvoie la liste des cellules accessibles depuis la case de départ en utilisant les MP indiqués (sans saut ni téléportation)
+ */
+function runOnlyCells(fromCell, MP){
+    // A vous !
+    
+}
+
+/**
+ * Fonction à compléter. Elle renvoie la liste des cellules accessibles depuis la case de départ en utilisant les MP indiqués + saut (sans téléportation)
+ */
+function runJumpCells(fromCell, MP){
+    // A vous !
+    
+}
+
+/**
+ * Fonction à compléter. Elle renvoie la liste des cellules accessibles depuis la case de départ en utilisant les MP indiqués + téléportation (sans saut)
+ */
+function runTeleportationCells(fromCell, MP){
+    // A vous !
+    
+}
+
+/**
+ * Fonction à compléter. Elle renvoie la liste des cellules accessibles depuis la case de départ en utilisant les MP indiqués + saut + téléportation
+ */
+function runJumpTeleportationCells(fromCell, MP){
+    // A vous !
+    
+}

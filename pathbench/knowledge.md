@@ -103,10 +103,29 @@ With array access in body:
 | `floor()` `ceil()` `round()` | 4 |
 | `sqrt()` | 10 |
 
+## Game Functions
+
+| Function | Cost | Notes |
+|----------|------|-------|
+| `getCellX()` | ~5-6 | Built-in coordinate lookup |
+| `getCellY()` | ~5-6 | Built-in coordinate lookup |
+| `isObstacle()` | ~8+ | Map check, cache if called repeatedly |
+
+## Variable Scope
+
+| Pattern | Cost | Notes |
+|---------|------|-------|
+| Global map access | 5 | `GLOBAL_MAP[k]` - standard map lookup |
+| Local variable assignment | ~1 | `var x = globalMap` - reference copy |
+| Local via cached global | 5 | No savings vs direct global access |
+
+**Key insight**: Caching globals as locals does NOT save ops. The assignment cost offsets any theoretical access savings. LeekScript resolves globals efficiently.
+
 ## Summary
 
 - **Base overhead**: Most operations have 3-5 ops base cost
 - **Set bulk ops are O(n)**: ~2 ops per element, NOT O(1)
 - **For-in is fast**: Contrary to some claims, for-in is the fastest loop
 - **Maps are efficient**: O(1) for read/write/size, similar cost to arrays
+- **Globals are fast**: No benefit to caching globals as locals
 - **Avoid**: `**` (43 ops), `sqrt` (10 ops), set bulk operations on large sets
