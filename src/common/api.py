@@ -389,6 +389,85 @@ class LeekWarsAPI:
         return r.json()
 
     # =========================================================================
+    # Leek Equipment & Build Management
+    # =========================================================================
+
+    def get_leek(self, leek_id: int) -> dict:
+        """Get full leek data including stats and equipment."""
+        r = self.session.get(f"{self.BASE_URL}/leek/get/{leek_id}")
+        return self._handle_response(r, "get leek")
+
+    def add_weapon(self, leek_id: int, weapon_id: int) -> dict:
+        """Equip a weapon on a leek."""
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/add-weapon",
+            data={"leek_id": leek_id, "weapon_id": weapon_id}
+        )
+        return self._handle_response(r, "add weapon")
+
+    def remove_weapon(self, weapon_id: int) -> dict:
+        """Unequip a weapon from a leek."""
+        r = self.session.delete(
+            f"{self.BASE_URL}/leek/remove-weapon",
+            json={"weapon_id": weapon_id}
+        )
+        return self._handle_response(r, "remove weapon")
+
+    def add_chip(self, leek_id: int, chip_id: int) -> dict:
+        """Equip a chip on a leek."""
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/add-chip",
+            data={"leek_id": leek_id, "chip_id": chip_id}
+        )
+        return self._handle_response(r, "add chip")
+
+    def remove_chip(self, chip_id: int) -> dict:
+        """Unequip a chip from a leek."""
+        r = self.session.delete(
+            f"{self.BASE_URL}/leek/remove-chip",
+            json={"chip_id": chip_id}
+        )
+        return self._handle_response(r, "remove chip")
+
+    def add_component(self, leek_id: int, component_id: int, index: int = 0) -> dict:
+        """Equip a component on a leek at a given slot index."""
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/add-component",
+            data={"leek_id": leek_id, "component_id": component_id, "index": index}
+        )
+        return self._handle_response(r, "add component")
+
+    def remove_component(self, component_id: int) -> dict:
+        """Unequip a component from a leek."""
+        r = self.session.delete(
+            f"{self.BASE_URL}/leek/remove-component",
+            json={"component_id": component_id}
+        )
+        return self._handle_response(r, "remove component")
+
+    def use_potion(self, leek_id: int, potion_id: int) -> dict:
+        """Use a potion on a leek (e.g. restat potion)."""
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/use-potion",
+            data={"leek_id": leek_id, "potion_id": potion_id}
+        )
+        return self._handle_response(r, "use potion")
+
+    def spend_capital(self, leek_id: int, characteristics: dict) -> dict:
+        """
+        Spend capital points on leek stats.
+
+        Args:
+            leek_id: The leek ID
+            characteristics: Dict of stat -> bonus points to add (e.g. {"life": 1000, "strength": 350})
+        """
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/spend-capital",
+            data={"leek_id": leek_id, "characteristics": json.dumps(characteristics)}
+        )
+        return self._handle_response(r, "spend capital")
+
+    # =========================================================================
     # Helpers
     # =========================================================================
 
