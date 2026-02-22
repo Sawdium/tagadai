@@ -4,13 +4,15 @@ AI Sync Tool - Manage AI code files on LeekWars.
 
 Usage:
     python -m src.tools.aisync list                     # List all AI files
+    python -m src.tools.aisync list --folders           # List folders with IDs
     python -m src.tools.aisync get <ai_id>              # Download AI code to stdout
     python -m src.tools.aisync get <ai_id> -o file.ls   # Download AI code to file
     python -m src.tools.aisync put <ai_id> <file>       # Upload code from file to AI
     python -m src.tools.aisync put <ai_id> -            # Upload code from stdin to AI
-    python -m src.tools.aisync new <name> [folder_id]   # Create new AI file
+    python -m src.tools.aisync new <name> [folder]      # Create new AI file (folder by path or id)
     python -m src.tools.aisync rename <ai_id> <name>    # Rename AI file
     python -m src.tools.aisync move <ai_id> <folder>    # Move AI to folder (path or id)
+    python -m src.tools.aisync mkdir <name> [parent_id] # Create folder
     python -m src.tools.aisync delete <ai_id>           # Delete AI file
     python -m src.tools.aisync download <dir>           # Download all AI files to directory
 """
@@ -54,6 +56,20 @@ def cmd_list(api: LeekWarsAPI, args):
 
     if args.json:
         print(json.dumps(data, indent=2))
+        return
+
+    # Show folders only
+    if args.folders:
+        print("FOLDERS:")
+        print("-" * 60)
+        print(f"  {'ID':>8}  {'Path':<40}")
+        print(f"  {0:>8}  {'(root)':<40}")
+        for fid in sorted(folders.keys()):
+            if fid == 0:
+                continue
+            path = get_path(fid)
+            print(f"  {fid:>8}  {path:<40}")
+        print(f"\nTotal: {len(folders) - 1} folders")
         return
 
     # Print tree
@@ -111,7 +127,39 @@ def cmd_put(api: LeekWarsAPI, args):
 
 def cmd_new(api: LeekWarsAPI, args):
     """Create new AI file."""
-    result = api.create_ai(args.name, args.folder_id, version=4)
+    folder_id = args.folder_id
+
+    # Support folder path instead of just ID
+    if isinstance(folder_id, str) and not folder_id.isdigit():
+        # Resolve folder path to ID
+        data = api.get_farmer_ais()
+        folders = {0: {"name": "", "parent": None}}
+        for f in data.get("folders", []):
+            folders[f["id"]] = {"name": f["name"], "parent": f.get("folder", 0)}
+
+        def get_path(fid: int) -> str:
+            if fid == 0:
+                return ""
+            parts = []
+            current = fid
+            while current != 0 and current in folders:
+                parts.append(folders[current]["name"])
+                current = folders[current]["parent"] or 0
+            return "/".join(reversed(parts))
+
+        folder_path = folder_id.strip("/")
+        folder_id = None
+        for fid in folders:
+            if get_path(fid) == folder_path:
+                folder_id = fid
+                break
+
+        if folder_id is None:
+            raise Exception(f"Folder '{args.folder_id}' not found. Use 'aisync list --folders' to see available folders.")
+    else:
+        folder_id = int(folder_id) if folder_id else 0
+
+    result = api.create_ai(args.name, folder_id, version=4)
     print(f"Created AI '{result['name']}' with id:{result['id']}", file=sys.stderr)
     print(result["id"])  # Output just the ID for scripting
 
@@ -271,6 +319,7 @@ def main():
     # list
     p_list = subparsers.add_parser("list", help="List all AI files")
     p_list.add_argument("--json", action="store_true", help="Output as JSON")
+    p_list.add_argument("--folders", action="store_true", help="Show folders with IDs only")
 
     # get
     p_get = subparsers.add_parser("get", help="Download AI code")
@@ -285,8 +334,8 @@ def main():
     # new
     p_new = subparsers.add_parser("new", help="Create new AI file")
     p_new.add_argument("name", help="Name for new AI")
-    p_new.add_argument("folder_id", type=int, nargs="?", default=0,
-                       help="Folder ID (default: root)")
+    p_new.add_argument("folder_id", nargs="?", default="0",
+                       help="Folder ID or path (e.g., 'Model/Tactical' or '31579')")
 
     # rename
     p_rename = subparsers.add_parser("rename", help="Rename AI file")
