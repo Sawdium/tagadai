@@ -1,5 +1,6 @@
 # Reference directories - DO NOT COMMIT (have their own repos)
 leekwars_gardener/
+leekwars_dalton_ranking/
 tagadalive/
 
 # Credentials - NEVER COMMIT
