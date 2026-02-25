@@ -118,7 +118,10 @@ class LeekWarsAPI:
         Returns:
             Fight ID
         """
-        r = self.session.post(f"{self.BASE_URL}/garden/start-solo-fight/{leek_id}/{enemy_id}")
+        r = self.session.post(
+            f"{self.BASE_URL}/garden/start-solo-fight",
+            data={"leek_id": leek_id, "target_id": enemy_id}
+        )
         data = self._handle_response(r, "start fight")
         return data["fight"]
 
@@ -129,7 +132,10 @@ class LeekWarsAPI:
         Returns:
             Fight ID
         """
-        r = self.session.post(f"{self.BASE_URL}/garden/start-farmer-fight/{enemy_id}")
+        r = self.session.post(
+            f"{self.BASE_URL}/garden/start-farmer-fight",
+            data={"target_id": enemy_id}
+        )
         data = self._handle_response(r, "start fight")
         return data["fight"]
 
@@ -466,6 +472,23 @@ class LeekWarsAPI:
             data={"leek_id": leek_id, "characteristics": json.dumps(characteristics)}
         )
         return self._handle_response(r, "spend capital")
+
+    # =========================================================================
+    # Market
+    # =========================================================================
+
+    def get_market_templates(self) -> dict:
+        """Get all market item templates with prices."""
+        r = self.session.get(f"{self.BASE_URL}/market/get-item-templates")
+        return self._handle_response(r, "get market templates")
+
+    def buy_item(self, item_id: int, quantity: int = 1) -> dict:
+        """Buy an item from the market with habs."""
+        r = self.session.post(
+            f"{self.BASE_URL}/market/buy-habs-quantity",
+            data={"item_id": item_id, "quantity": quantity}
+        )
+        return self._handle_response(r, f"buy item {item_id}")
 
     # =========================================================================
     # Helpers
