@@ -76,6 +76,18 @@ python -m src.tools.boss --boss 2                 # Fennel King
 python -m src.tools.boss --boss 3                 # Evil Pumpkin
 python -m src.tools.boss --leeks 128883,131291    # Specific leeks only
 python -m src.tools.boss --wait                   # Wait for fight result
+python -m src.tools.boss --with tagadanar         # Multi-account squad (same password)
+python -m src.tools.boss --with tagadanar,tagadalone  # Multiple extra accounts
+python -m src.tools.boss --boss 3 --with tagadanar --wait  # Full combo
+
+# Build Management
+python -m src.tools.build list                   # List all saved builds
+python -m src.tools.build list <leek>            # List builds for specific leek
+python -m src.tools.build save <leek> <name>     # Snapshot current build
+python -m src.tools.build show <leek> <name>     # Display build details
+python -m src.tools.build restore <leek> <name>  # Restore (with confirmation)
+python -m src.tools.build restore <leek> <name> --buy   # Auto-buy missing items from market
+python -m src.tools.build restore <leek> <name> --buy --yes  # Buy + skip confirmation
 
 # RL
 python -m src.tools.rl duel [--seed 42]
