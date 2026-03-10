@@ -196,6 +196,7 @@ def main():
     parser.add_argument("--review", type=int, metavar="ID", help="Review a saved fight by ID")
     parser.add_argument("--no-save", action="store_true", help="Don't save fight to log")
     parser.add_argument("--scenario", type=int, help="Test scenario ID (default: 0 for Domingo)")
+    parser.add_argument("--count", type=int, default=1, help="Number of fights to run (default: 1)")
     args = parser.parse_args()
 
     # Handle --list and --review without needing credentials
@@ -215,78 +216,79 @@ def main():
 
         print("Logged in.", file=sys.stderr)
 
-        is_test_fight = False
+        # Pre-resolve leek/AI for non-farmer fights (only once)
+        leek_id = args.leek
+        ai_id = args.ai
+        is_test_fight = not args.real
 
-        if args.real:
-            # Real fight (uses fight count)
-            if args.farmer:
-                opponents = api.get_farmer_opponents()
-                opponent = select_opponent(opponents, args.strategy)
-                print(f"Starting REAL farmer fight vs {opponent['name']} (T:{opponent.get('talent', '?')})...", file=sys.stderr)
-                fight_id = api.start_farmer_fight(opponent["id"])
-            else:
-                leek_id = args.leek
-                if not leek_id:
-                    leeks = farmer.get("leeks", {})
-                    if not leeks:
-                        raise Exception("No leeks on account!")
-                    leek_id = int(list(leeks.keys())[0])
-                    leek_name = leeks[str(leek_id)]["name"]
-                else:
-                    leek_name = f"#{leek_id}"
-
-                opponents = api.get_leek_opponents(leek_id)
-                opponent = select_opponent(opponents, args.strategy)
-                opp_name = opponent.get("name", "Unknown")
-                opp_talent = opponent.get("talent", "?")
-                print(f"Starting REAL solo fight: {leek_name} vs {opp_name} (T:{opp_talent})...", file=sys.stderr)
-                fight_id = api.start_solo_fight(leek_id, opponent["id"])
-        else:
-            # Test fight against Domingo (default - free, doesn't use fight count)
-            ai_id = args.ai
-            if not ai_id:
-                # Get AI from leek or first valid AI
+        if args.real and not args.farmer:
+            if not leek_id:
                 leeks = farmer.get("leeks", {})
-                if args.leek and str(args.leek) in leeks:
-                    ai_id = leeks[str(args.leek)].get("ai")
-                elif leeks:
-                    first_leek = list(leeks.values())[0]
-                    ai_id = first_leek.get("ai")
+                if not leeks:
+                    raise Exception("No leeks on account!")
+                leek_id = int(list(leeks.keys())[0])
 
-                if not ai_id:
-                    # Fallback: get first valid AI from account
-                    ai_data = api.get_farmer_ais()
-                    valid_ais = [a for a in ai_data.get("ais", []) if a.get("valid")]
-                    if not valid_ais:
-                        raise Exception("No valid AI found on account!")
-                    ai_id = valid_ais[0]["id"]
-                    print(f"Using AI: {valid_ais[0]['name']} (id:{ai_id})", file=sys.stderr)
+        if not args.real and not ai_id:
+            leeks = farmer.get("leeks", {})
+            if args.leek and str(args.leek) in leeks:
+                ai_id = leeks[str(args.leek)].get("ai")
+            elif leeks:
+                ai_id = list(leeks.values())[0].get("ai")
+            if not ai_id:
+                ai_data = api.get_farmer_ais()
+                valid_ais = [a for a in ai_data.get("ais", []) if a.get("valid")]
+                if not valid_ais:
+                    raise Exception("No valid AI found on account!")
+                ai_id = valid_ais[0]["id"]
 
-            scenario_id = args.scenario if args.scenario else 0
-            scenario_name = f"scenario {scenario_id}" if scenario_id else "Domingo"
-            print(f"Starting TEST fight vs {scenario_name} (AI id:{ai_id})...", file=sys.stderr)
-            fight_id = api.start_test_fight(ai_id, scenario_id=scenario_id)
-            is_test_fight = True
+        wins, losses, draws = 0, 0, 0
+        for i in range(args.count):
+            prefix = f"[{i+1}/{args.count}] " if args.count > 1 else ""
 
-        print(f"Fight #{fight_id} started, waiting for result...", file=sys.stderr)
-        result = wait_for_fight(api, fight_id, is_test=is_test_fight)
+            if args.real:
+                if args.farmer:
+                    opponents = api.get_farmer_opponents()
+                    opponent = select_opponent(opponents, args.strategy)
+                    print(f"{prefix}REAL farmer vs {opponent['name']} (T:{opponent.get('talent', '?')})...", file=sys.stderr)
+                    fight_id = api.start_farmer_fight(opponent["id"])
+                else:
+                    opponents = api.get_leek_opponents(leek_id)
+                    opponent = select_opponent(opponents, args.strategy)
+                    print(f"{prefix}REAL solo vs {opponent.get('name', '?')} (T:{opponent.get('talent', '?')})...", file=sys.stderr)
+                    fight_id = api.start_solo_fight(leek_id, opponent["id"])
+            else:
+                scenario_id = args.scenario if args.scenario else 0
+                scenario_name = f"scenario {scenario_id}" if scenario_id else "Domingo"
+                print(f"{prefix}TEST vs {scenario_name} (AI:{ai_id})...", file=sys.stderr)
+                fight_id = api.start_test_fight(ai_id, scenario_id=scenario_id)
 
-        # Fetch debug logs from separate endpoint
-        print(f"Fetching debug logs...", file=sys.stderr)
-        api_logs = fetch_fight_logs(api, fight_id)
+            print(f"{prefix}Fight #{fight_id}, waiting...", file=sys.stderr)
+            result = wait_for_fight(api, fight_id, is_test=is_test_fight)
 
-        # Parse the fight
-        summary = parse_fight(result, farmer_id, api_logs=api_logs)
+            api_logs = fetch_fight_logs(api, fight_id) if args.count == 1 else {}
+            summary = parse_fight(result, farmer_id, api_logs=api_logs)
 
-        # Save to log (unless --no-save)
-        if not args.no_save:
-            save_fight_log(fight_id, result, summary, is_test=is_test_fight)
+            if not args.no_save and args.count == 1:
+                save_fight_log(fight_id, result, summary, is_test=is_test_fight)
 
-        # Output
-        if args.json:
-            print(json.dumps(result, indent=2))
-        else:
-            print(format_summary(summary))
+            if summary.we_won:
+                wins += 1
+            elif summary.winner == 0:
+                draws += 1
+            else:
+                losses += 1
+
+            if args.count == 1:
+                if args.json:
+                    print(json.dumps(result, indent=2))
+                else:
+                    print(format_summary(summary))
+            else:
+                tag = "WIN" if summary.we_won else ("DRAW" if summary.winner == 0 else "LOSS")
+                print(f"{prefix}{tag} (#{fight_id}, {summary.total_turns}t)", file=sys.stderr)
+
+        if args.count > 1:
+            print(f"\nResults: {wins}W / {losses}L / {draws}D ({wins}/{args.count})", file=sys.stderr)
 
     except TagadAIError as e:
         print(f"ERROR: {e}", file=sys.stderr)

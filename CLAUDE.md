@@ -57,6 +57,7 @@ python -m src.tools.fight                        # Test vs Domingo (passive)
 python -m src.tools.fight --scenario 37772       # Test vs SimpleOpponent (RECOMMENDED for combat)
 python -m src.tools.fight --json                 # Raw JSON output
 python -m src.tools.fight --real [--farmer]      # REAL fight (costs 1 fight)
+python -m src.tools.fight --real --farmer --count 50  # Batch: 50 farmer fights
 
 # AI Sync
 python -m src.tools.aisync list                  # List files with IDs
