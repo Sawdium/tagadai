@@ -14,7 +14,8 @@ Usage:
     # Now use any API method
     status = api.get_garden()
     opponents = api.get_leek_opponents(leek_id)
-    ai_code = api.get_ai(ai_id)
+    ai_code = api.read_ai("main")
+    api.write_ai("main", new_code)
 """
 
 import json
@@ -28,12 +29,20 @@ class LeekWarsAPI:
     """
     Unified API client for LeekWars.
 
-    Combines all API functionality:
-    - Authentication (login)
-    - Garden operations (opponents, fights)
-    - AI management (list, get, save, create, rename, delete)
-    - Test scenarios (create, update, delete, manage leeks)
-    - Fight retrieval and logs
+    Verification legend (per-method markers below):
+      VERIFIED   — exercised with a successful round-trip in the 2026 API.
+      UNVERIFIED — inherited from pre-2026 code, never re-tested. May return
+                   no_such_service or require a different payload. The only
+                   methods still in this state are ones that irreversibly
+                   consume resources (potions, capital, habs) and were
+                   deliberately skipped in the verification pass:
+                     - use_potion       (consumes a potion instance)
+                     - spend_capital    (reversible only via restat potion)
+                     - buy_item         (spends habs)
+
+    The AI / ai-folder endpoints are fully path-based — no integer IDs.
+    Scenario endpoints also use paths for the `ai` field (confirmed via
+    round-trip). See docs/LEEKWARS_API.md for payload details.
     """
 
     BASE_URL = "https://leekwars.com/api"
@@ -48,8 +57,7 @@ class LeekWarsAPI:
     # =========================================================================
 
     def login(self, login: str, password: str) -> dict:
-        """
-        Authenticate with LeekWars.
+        """[VERIFIED] Authenticate with LeekWars.
 
         Args:
             login: Username or email
@@ -95,28 +103,27 @@ class LeekWarsAPI:
     # =========================================================================
 
     def get_garden(self) -> dict:
-        """Get garden state (includes compositions)."""
+        """[VERIFIED] Get garden state (includes compositions)."""
         r = self.session.get(f"{self.BASE_URL}/garden/get")
         return self._handle_response(r)
 
     def get_leek_opponents(self, leek_id: int) -> list:
-        """Get opponents for solo fights."""
+        """[VERIFIED] Get opponents for solo fights."""
         r = self.session.get(f"{self.BASE_URL}/garden/get-leek-opponents/{leek_id}")
         data = self._handle_response(r)
         return data.get("opponents", [])
 
     def get_farmer_opponents(self) -> list:
-        """Get opponents for farmer fights."""
+        """[VERIFIED] Get opponents for farmer fights."""
         r = self.session.get(f"{self.BASE_URL}/garden/get-farmer-opponents")
         data = self._handle_response(r)
         return data.get("opponents", [])
 
     def start_solo_fight(self, leek_id: int, enemy_id: int) -> int:
-        """
-        Start a solo fight.
+        """[VERIFIED] Start a solo fight. Consumes 1 fight from the daily pool.
 
-        Returns:
-            Fight ID
+        Payload is body-form {leek_id, target_id} — the old doc listing URL
+        path segments is stale. Returns fight ID.
         """
         r = self.session.post(
             f"{self.BASE_URL}/garden/start-solo-fight",
@@ -126,11 +133,9 @@ class LeekWarsAPI:
         return data["fight"]
 
     def start_farmer_fight(self, enemy_id: int) -> int:
-        """
-        Start a farmer fight.
+        """[VERIFIED] Start a farmer fight. Consumes 1 fight from the daily pool.
 
-        Returns:
-            Fight ID
+        Payload is body-form {target_id}. Returns fight ID.
         """
         r = self.session.post(
             f"{self.BASE_URL}/garden/start-farmer-fight",
@@ -140,16 +145,7 @@ class LeekWarsAPI:
         return data["fight"]
 
     def get_fight(self, fight_id: int, with_logs: bool = True) -> dict:
-        """
-        Get fight data.
-
-        Args:
-            fight_id: The fight ID
-            with_logs: Include debug logs in response
-
-        Returns:
-            Fight data dict
-        """
+        """[VERIFIED] Get fight data. Optional ?logs=true for debug logs inline."""
         url = f"{self.BASE_URL}/fight/get/{fight_id}"
         if with_logs:
             url += "?logs=true"
@@ -157,131 +153,197 @@ class LeekWarsAPI:
         return r.json()
 
     def get_fight_logs(self, fight_id: int) -> dict:
-        """
-        Get debug logs for a fight (separate endpoint).
-
-        Returns logs indexed by farmer and action, containing debug(), debugW(), debugE() output.
-        """
+        """[VERIFIED] Get debug logs for a fight. Keyed by farmer id, then action index."""
         r = self.session.get(f"{self.BASE_URL}/fight/get-logs/{fight_id}")
         return r.json()
 
     # =========================================================================
-    # AI Management
+    # AI Management (path-based — 2026 API)
     # =========================================================================
+    # Files and folders are identified by their full path (e.g. "main",
+    # "Model/Combos/Action", "Controlers/Maps"). There are no integer IDs
+    # for AI files or folders anymore.
 
-    def get_farmer_ais(self) -> dict:
-        """Get all AI files and folders for the farmer."""
-        r = self.session.get(f"{self.BASE_URL}/ai/get-farmer-ais")
-        return r.json()
+    def get_ai_tree(self) -> dict:
+        """[VERIFIED] Get the AI tree from the most recent farmer snapshot.
 
-    def get_ai(self, ai_id: int) -> dict:
+        Structure: {files: [...], folders: [...], bin: [...], leek_ais: {...}}
+        Each file has: path, mtime, valid, version, strict, entrypoint,
+                       total_lines, total_chars, scenario.
+        Call refresh_farmer() to get a fresh snapshot.
         """
-        Get AI details including code.
+        if not self.farmer:
+            raise APIError("Not authenticated — call login() first")
+        return self.farmer.get("ai_tree", {}) or {}
 
-        Returns:
-            Dict with 'ai' key containing AI data
-        """
-        r = self.session.get(f"{self.BASE_URL}/ai/get/{ai_id}")
-        return self._handle_response(r, "get AI")
+    def refresh_farmer(self) -> dict:
+        """[VERIFIED] Re-fetch the farmer snapshot (refreshes ai_tree)."""
+        r = self.session.get(f"{self.BASE_URL}/farmer/get-from-token")
+        data = self._handle_response(r, "refresh farmer")
+        self.farmer = data.get("farmer", self.farmer)
+        return self.farmer
 
-    def save_ai(self, ai_id: int, code: str) -> dict:
-        """Save code to an AI file."""
+    def list_ais(self) -> list[dict]:
+        """[VERIFIED] List active AI file metadata (excludes bin)."""
+        return list(self.get_ai_tree().get("files", []))
+
+    def list_ai_folders(self) -> list[str]:
+        """[VERIFIED] List folder paths."""
+        return list(self.get_ai_tree().get("folders", []))
+
+    def list_ai_bin(self) -> list[dict]:
+        """[VERIFIED] List files in the bin (deleted but recoverable)."""
+        return list(self.get_ai_tree().get("bin", []))
+
+    def get_leek_ai_paths(self) -> dict:
+        """[VERIFIED] Map of leek_id (int) -> assigned AI path (str)."""
+        raw = self.get_ai_tree().get("leek_ais", {}) or {}
+        return {int(k): v for k, v in raw.items()}
+
+    def read_ai(self, path: str) -> str:
+        """[VERIFIED] Read source code of an AI file by its path."""
         r = self.session.post(
-            f"{self.BASE_URL}/ai/save",
-            data={"ai_id": ai_id, "code": code}
+            f"{self.BASE_URL}/ai/read",
+            data={"path": path}
         )
-        return self._handle_response(r, "save AI")
+        data = self._handle_response(r, f"read AI {path!r}")
+        return data.get("code", "")
 
-    def create_ai(self, name: str, folder_id: int = 0, version: int = 4) -> dict:
+    def write_ai(self, path: str, code: str) -> dict:
+        """[VERIFIED] Save source code to an AI file by path.
+
+        Returns dict with 'result' (compile diagnostics) and 'modified' (mtime ms).
         """
-        Create a new AI file.
+        r = self.session.post(
+            f"{self.BASE_URL}/ai/write",
+            data={"path": path, "code": code}
+        )
+        return self._handle_response(r, f"write AI {path!r}")
+
+    def create_ai(self, name: str, folder: str = "", version: int = 4) -> dict:
+        """[VERIFIED] Create a new AI file.
 
         Args:
-            name: AI file name
-            folder_id: Parent folder ID (0 for root)
-            version: LeekScript version (default: 4)
+            name: File name (no path separators)
+            folder: Parent folder path ("" for root, e.g. "Model/Combos")
+            version: LeekScript version (default 4)
 
         Returns:
-            Dict with 'id' and 'name'
+            Dict with 'path' and default 'code'.
         """
         r = self.session.post(
-            f"{self.BASE_URL}/ai/new-name",
-            data={"folder_id": folder_id, "version": str(version), "name": name}
+            f"{self.BASE_URL}/ai/create",
+            data={"folder": folder, "name": name, "version": str(version)}
         )
-        data = self._handle_response(r, "create AI")
-        return {"id": data["ai"]["id"], "name": name}
+        return self._handle_response(r, f"create AI {name!r} in {folder!r}")
 
-    def rename_ai(self, ai_id: int, name: str) -> dict:
-        """Rename an AI file."""
+    def rename_ai(self, path: str, new_name: str) -> dict:
+        """[VERIFIED] Rename an AI file. Returns {'path': <new_full_path>}.
+
+        `new_name` is a bare filename (no slash); the parent folder is
+        preserved. Same-name renames fail with 'name_conflict'.
+        """
         r = self.session.post(
             f"{self.BASE_URL}/ai/rename",
-            data={"ai_id": ai_id, "new_name": name}
+            data={"path": path, "new_name": new_name}
         )
-        return self._handle_response(r, "rename AI")
+        return self._handle_response(r, f"rename AI {path!r}")
 
-    def delete_ai(self, ai_id: int) -> dict:
-        """Delete an AI file."""
+    def move_ai(self, path: str, dest: str) -> dict:
+        """[VERIFIED] Move an AI file to a different folder path.
+
+        Use `dest=''` for root. `dest='/'` is rejected as invalid_path.
+        Returns {'path': <new_full_path>}.
+        """
+        r = self.session.post(
+            f"{self.BASE_URL}/ai/move",
+            data={"path": path, "dest": dest}
+        )
+        return self._handle_response(r, f"move AI {path!r} -> {dest!r}")
+
+    def delete_ai(self, path: str) -> dict:
+        """[VERIFIED] Move an AI file to the bin. Returns {'trash_name': ...}."""
         r = self.session.delete(
             f"{self.BASE_URL}/ai/delete",
-            json={"ai_id": ai_id}
+            json={"path": path}
         )
-        return self._handle_response(r, "delete AI")
+        return self._handle_response(r, f"delete AI {path!r}")
 
-    def move_ai(self, ai_id: int, folder_id: int) -> dict:
-        """
-        Move an AI file to a different folder.
+    def restore_ai(self, trash_name: str) -> dict:
+        """[VERIFIED] Restore a file from the bin using its trash name.
 
-        Args:
-            ai_id: AI file ID
-            folder_id: Target folder ID (0 for root)
-
-        Returns:
-            Empty dict on success
+        Returns {'path': <restored_path>}. The file returns to live tree and
+        leaves the bin.
         """
         r = self.session.post(
-            f"{self.BASE_URL}/ai/change-folder",
-            data={"ai_id": ai_id, "folder_id": folder_id}
+            f"{self.BASE_URL}/ai/restore",
+            data={"trash_name": trash_name}
         )
-        # This endpoint returns [] on success, not a dict
-        return {"success": True}
+        return self._handle_response(r, f"restore AI {trash_name!r}")
 
-    def create_folder(self, name: str, parent_id: int = 0) -> dict:
+    def empty_bin(self) -> list:
+        """[VERIFIED] Permanently delete every file currently in the bin.
+
+        No body required; returns []. This is irreversible — anything in the
+        bin is gone after this call.
         """
-        Create a new AI folder.
+        r = self.session.delete(f"{self.BASE_URL}/ai/bin")
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to empty bin: {data.get('error')}")
+        return data
 
-        Returns:
-            Dict with 'id' and 'name'
+    def create_folder(self, path: str) -> list:
+        """[VERIFIED] Create an AI folder at the given full path.
+
+        Returns an empty list `[]` on success (not a dict). Creates one level;
+        the parent path must already exist.
         """
         r = self.session.post(
-            f"{self.BASE_URL}/ai-folder/new/{parent_id}",
-            data={"folder_id": parent_id}
+            f"{self.BASE_URL}/ai-folder/create",
+            data={"path": path}
         )
-        data = self._handle_response(r, "create folder")
-        folder_id = data["id"]
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to create folder {path!r}: {data.get('error')}")
+        return data
 
-        # Rename it
-        self.session.post(
-            f"{self.BASE_URL}/ai-folder/rename/{folder_id}/{name}",
-            data={"folder_id": folder_id, "new_name": name}
+    def rename_folder(self, path: str, new_name: str) -> dict:
+        """[VERIFIED] Rename an AI folder. Returns {'path': <new_full_path>}."""
+        r = self.session.post(
+            f"{self.BASE_URL}/ai-folder/rename",
+            data={"path": path, "new_name": new_name}
         )
+        return self._handle_response(r, f"rename folder {path!r}")
 
-        return {"id": folder_id, "name": name}
+    def delete_folder(self, path: str) -> dict:
+        """[VERIFIED] Delete an AI folder (moves it to bin).
+
+        Returns {'trash_name': <path>}. Folder must be empty — if a file was
+        just moved out, wait ~1s before deleting to avoid sporadic
+        'internal_error' responses from server-side race conditions.
+        """
+        r = self.session.delete(
+            f"{self.BASE_URL}/ai-folder/delete",
+            json={"path": path}
+        )
+        return self._handle_response(r, f"delete folder {path!r}")
 
     # =========================================================================
     # Test Scenarios
     # =========================================================================
 
     def get_test_scenarios(self) -> dict:
-        """Get all test scenarios."""
+        """[VERIFIED] Get all test scenarios."""
         r = self.session.get(f"{self.BASE_URL}/test-scenario/get-all")
         return r.json()
 
-    def start_test_fight(self, ai_id: int, scenario_id: int = 0) -> int:
-        """
-        Start a test fight against Domingo (or custom scenario).
+    def start_test_fight(self, ai: "int | str", scenario_id: int = 0) -> int:
+        """[VERIFIED] Start a test fight against Domingo (or custom scenario).
 
         Args:
-            ai_id: The AI to test
+            ai: The AI to test — path string (preferred, e.g. "main") or
+                legacy integer ai_id (still accepted by the server).
             scenario_id: Scenario ID (0 for default Domingo scenario)
 
         Returns:
@@ -289,61 +351,61 @@ class LeekWarsAPI:
         """
         r = self.session.post(
             f"{self.BASE_URL}/ai/test-scenario",
-            data={"ai_id": ai_id, "scenario_id": scenario_id}
+            data={"ai_id": ai, "scenario_id": scenario_id}
         )
         data = self._handle_response(r, "start test fight")
         return data["fight"]
 
     def create_test_scenario(self, name: str) -> dict:
-        """Create a new test scenario."""
+        """[VERIFIED] Create a new test scenario. Returns {'id': <new_id>}."""
         r = self.session.post(
             f"{self.BASE_URL}/test-scenario/new",
             data={"name": name}
         )
-        return r.json()
+        return self._handle_response(r, "create test scenario")
 
-    def update_test_scenario(
-        self,
-        scenario_id: int,
-        scenario_type: int = 0,
-        map_id: int = 0,
-        seed: int = 0
-    ) -> dict:
-        """Update test scenario settings."""
+    def update_test_scenario(self, scenario_id: int, **fields) -> list:
+        """[VERIFIED] Update test scenario settings. Returns [] on success.
+
+        Keyword args go into the `data` JSON blob. Accepted keys include:
+          type (int), map (int), seed (int), max_turns (int),
+          turret_ai_team1 (path str), turret_ai_team2 (path str).
+        """
         r = self.session.post(
             f"{self.BASE_URL}/test-scenario/update",
-            data={
-                "scenario_id": scenario_id,
-                "type": scenario_type,
-                "map": map_id,
-                "seed": seed
-            }
+            data={"id": scenario_id, "data": json.dumps(fields)}
         )
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to update test scenario: {data.get('error')}")
+        return data
 
-    def delete_test_scenario(self, scenario_id: int) -> dict:
-        """Delete a test scenario."""
+    def delete_test_scenario(self, scenario_id: int) -> list:
+        """[VERIFIED] Delete a test scenario. Returns [] on success."""
         r = self.session.delete(
             f"{self.BASE_URL}/test-scenario/delete",
-            json={"scenario_id": scenario_id}
+            json={"id": scenario_id}
         )
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to delete test scenario: {data.get('error')}")
+        return data
 
     def add_leek_to_scenario(
         self,
         scenario_id: int,
         leek_id: int,
         team: int,
-        ai_id: int
-    ) -> dict:
-        """
-        Add a leek to a test scenario.
+        ai: "int | str"
+    ) -> list:
+        """[VERIFIED] Add a leek to a test scenario. Returns [] on success.
 
         Args:
             scenario_id: Scenario ID
-            leek_id: Leek ID
-            team: 0 for team1, 1 for team2
-            ai_id: AI to use for this leek
+            leek_id: Leek ID (positive for real leeks, negative for test leeks)
+            team: 1 for team1, 2 for team2 (scenarios show team1/team2 separately)
+            ai: AI path string (e.g. 'main'). Server accepts bare path or
+                the built-in '/normal' for no custom AI.
         """
         r = self.session.post(
             f"{self.BASE_URL}/test-scenario/add-leek",
@@ -351,144 +413,166 @@ class LeekWarsAPI:
                 "scenario_id": scenario_id,
                 "leek": leek_id,
                 "team": team,
-                "ai": ai_id
+                "ai": ai
             }
         )
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to add leek to scenario: {data.get('error')}")
+        return data
 
-    def delete_leek_from_scenario(self, scenario_id: int, leek_id: int) -> dict:
-        """Remove a leek from a test scenario."""
+    def delete_leek_from_scenario(self, scenario_id: int, leek_id: int) -> list:
+        """[VERIFIED] Remove a leek from a test scenario. Returns [] on success."""
         r = self.session.delete(
             f"{self.BASE_URL}/test-scenario/delete-leek",
             json={"scenario_id": scenario_id, "leek": leek_id}
         )
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to delete leek from scenario: {data.get('error')}")
+        return data
 
     def create_test_leek(self, name: str) -> dict:
-        """Create a new test leek."""
+        """[VERIFIED] Create a new test leek.
+
+        Returns {'id': <negative_id>, 'data': {skin, level, life, strength,
+        wisdom, agility, resistance, science, magic, frequency, cores, ram,
+        tp, mp, chips, weapons, ...}}. Keep the `data` dict and pass it to
+        update_test_leek to modify stats — the update endpoint rejects
+        partial payloads.
+        """
         r = self.session.post(
             f"{self.BASE_URL}/test-leek/new",
             data={"name": name}
         )
-        return r.json()
+        return self._handle_response(r, "create test leek")
 
-    def update_test_leek(self, leek_id: int, leek_data: dict) -> dict:
-        """
-        Update a test leek's stats.
+    def update_test_leek(self, leek_id: int, leek_data: dict) -> list:
+        """[VERIFIED] Update a test leek's stats. Returns [] on success.
+
+        IMPORTANT: `leek_data` must be the complete data blob — partial
+        updates fail with 'missing_field'. Fetch the current blob from the
+        create_test_leek response (or from get_test_scenarios().leeks) and
+        merge your changes in.
 
         Args:
             leek_id: The test leek ID (negative number)
-            leek_data: Dict with leek properties (level, life, strength, etc.)
+            leek_data: Full data dict (skin, level, life, all stats, chips, weapons).
         """
         r = self.session.post(
             f"{self.BASE_URL}/test-leek/update",
             data={"id": leek_id, "data": json.dumps(leek_data)}
         )
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to update test leek: {data.get('error')}")
+        return data
 
-    def delete_test_leek(self, leek_id: int) -> dict:
-        """Delete a test leek."""
+    def delete_test_leek(self, leek_id: int) -> list:
+        """[VERIFIED] Delete a test leek. Returns [] on success."""
         r = self.session.delete(
             f"{self.BASE_URL}/test-leek/delete",
-            json={"leek_id": leek_id}
+            json={"id": leek_id}
         )
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and "error" in data:
+            raise APIError(f"Failed to delete test leek: {data.get('error')}")
+        return data
 
     # =========================================================================
-    # Leek Equipment & Build Management
+    # Leek
     # =========================================================================
 
     def get_leek(self, leek_id: int) -> dict:
-        """Get full leek data including stats and equipment."""
+        """[VERIFIED] Get full leek data including stats and equipment.
+
+        Equipment/stat changes are no longer done piecemeal — see the Loadout
+        methods above and src/tools/loadout.py, which apply a whole build
+        (weapons + chips + components + restat) in one native call.
+        """
         r = self.session.get(f"{self.BASE_URL}/leek/get/{leek_id}")
         return self._handle_response(r, "get leek")
 
-    def add_weapon(self, leek_id: int, weapon_id: int) -> dict:
-        """Equip a weapon on a leek."""
-        r = self.session.post(
-            f"{self.BASE_URL}/leek/add-weapon",
-            data={"leek_id": leek_id, "weapon_id": weapon_id}
-        )
-        return self._handle_response(r, "add weapon")
+    # =========================================================================
+    # Loadouts (équipements) — native build presets
+    # =========================================================================
+    # A loadout ("set") stores weapons, chips and a stat allocation that can be
+    # applied to any leek in one call (optionally restatting). Identified by an
+    # integer set_id. Notes discovered by round-trip probing:
+    #   - stats{} values are CAPITAL points per characteristic (not the
+    #     characteristic value). See src/tools/loadout.py for the conversion.
+    #   - components are {index, template} objects (slot 0-7); apply() reinstalls
+    #     them on the leek, so they MUST be included or the leek loses the
+    #     cores/ram/stat hardware that supplies its extra slots.
+    #   - illicit weapons (115-119) and some reward weapons (175, 225) cannot be
+    #     stored; they are returned under forgotten_weapons and dropped.
 
-    def remove_weapon(self, weapon_id: int) -> dict:
-        """Unequip a weapon from a leek."""
-        r = self.session.delete(
-            f"{self.BASE_URL}/leek/remove-weapon",
-            json={"weapon_id": weapon_id}
-        )
-        return self._handle_response(r, "remove weapon")
+    def get_loadouts(self) -> dict:
+        """[VERIFIED] Get all loadouts plus owned weapon/chip template ids.
 
-    def add_chip(self, leek_id: int, chip_id: int) -> dict:
-        """Equip a chip on a leek."""
-        r = self.session.post(
-            f"{self.BASE_URL}/leek/add-chip",
-            data={"leek_id": leek_id, "chip_id": chip_id}
-        )
-        return self._handle_response(r, "add chip")
-
-    def remove_chip(self, chip_id: int) -> dict:
-        """Unequip a chip from a leek."""
-        r = self.session.delete(
-            f"{self.BASE_URL}/leek/remove-chip",
-            json={"chip_id": chip_id}
-        )
-        return self._handle_response(r, "remove chip")
-
-    def add_component(self, leek_id: int, component_id: int, index: int = 0) -> dict:
-        """Equip a component on a leek at a given slot index."""
-        r = self.session.post(
-            f"{self.BASE_URL}/leek/add-component",
-            data={"leek_id": leek_id, "component_id": component_id, "index": index}
-        )
-        return self._handle_response(r, "add component")
-
-    def remove_component(self, component_id: int) -> dict:
-        """Unequip a component from a leek."""
-        r = self.session.delete(
-            f"{self.BASE_URL}/leek/remove-component",
-            json={"component_id": component_id}
-        )
-        return self._handle_response(r, "remove component")
-
-    def use_potion(self, leek_id: int, potion_id: int) -> dict:
-        """Use a potion on a leek (e.g. restat potion)."""
-        r = self.session.post(
-            f"{self.BASE_URL}/leek/use-potion",
-            data={"leek_id": leek_id, "potion_id": potion_id}
-        )
-        return self._handle_response(r, "use potion")
-
-    def spend_capital(self, leek_id: int, characteristics: dict) -> dict:
+        Returns {loadouts: [{id, name, icon, weapons[], forgotten_weapons[],
+        chips[], components[], stats{}, order}], owned_weapons[], owned_chips[]}.
         """
-        Spend capital points on leek stats.
+        r = self.session.get(f"{self.BASE_URL}/loadout/get-all")
+        return self._handle_response(r, "get loadouts")
 
-        Args:
-            leek_id: The leek ID
-            characteristics: Dict of stat -> bonus points to add (e.g. {"life": 1000, "strength": 350})
+    def create_loadout(self, name: str, icon: "int | str", weapons: list,
+                       chips: list, components: list, stats: dict) -> dict:
+        """[VERIFIED] Create a loadout. Returns {'set': {...}}.
+
+        weapons/chips/components are template-id lists; stats is a map of
+        characteristic -> capital points. All are JSON-encoded in the body.
         """
         r = self.session.post(
-            f"{self.BASE_URL}/leek/spend-capital",
-            data={"leek_id": leek_id, "characteristics": json.dumps(characteristics)}
+            f"{self.BASE_URL}/loadout/create",
+            data={
+                "name": name, "icon": icon,
+                "weapons": json.dumps(weapons),
+                "chips": json.dumps(chips),
+                "components": json.dumps(components),
+                "stats": json.dumps(stats),
+            }
         )
-        return self._handle_response(r, "spend capital")
+        return self._handle_response(r, f"create loadout {name!r}")
 
-    # =========================================================================
-    # Market
-    # =========================================================================
+    def update_loadout(self, set_id: int, name: str, icon: "int | str",
+                       weapons: list, chips: list, components: list,
+                       stats: dict) -> dict:
+        """[VERIFIED] Overwrite a loadout (HTTP PUT). Returns {'set': {...}}."""
+        r = self.session.put(
+            f"{self.BASE_URL}/loadout/update",
+            data={
+                "set_id": set_id, "name": name, "icon": icon,
+                "weapons": json.dumps(weapons),
+                "chips": json.dumps(chips),
+                "components": json.dumps(components),
+                "stats": json.dumps(stats),
+            }
+        )
+        return self._handle_response(r, f"update loadout {set_id}")
 
-    def get_market_templates(self) -> dict:
-        """Get all market item templates with prices."""
-        r = self.session.get(f"{self.BASE_URL}/market/get-item-templates")
-        return self._handle_response(r, "get market templates")
+    def delete_loadout(self, set_id: int) -> dict:
+        """[VERIFIED] Delete a loadout by set_id (HTTP DELETE)."""
+        r = self.session.delete(
+            f"{self.BASE_URL}/loadout/delete",
+            json={"set_id": set_id}
+        )
+        return self._handle_response(r, f"delete loadout {set_id}")
 
-    def buy_item(self, item_id: int, quantity: int = 1) -> dict:
-        """Buy an item from the market with habs."""
+    def apply_loadout(self, set_id: int, leek_id: int, use_restat: bool = False) -> dict:
+        """[VERIFIED] Apply a loadout to a leek (equip weapons/chips, and when
+        use_restat is true, restat the leek to the loadout's stat allocation).
+
+        This is the native replacement for build.py's manual strip/restat/
+        re-equip. use_restat is required by the server; pass False to only swap
+        gear, True to also reallocate capital (consumes a restat potion).
+        """
         r = self.session.post(
-            f"{self.BASE_URL}/market/buy-habs-quantity",
-            data={"item_id": item_id, "quantity": quantity}
+            f"{self.BASE_URL}/loadout/apply",
+            data={"set_id": set_id, "leek_id": leek_id,
+                  "use_restat": "true" if use_restat else "false"}
         )
-        return self._handle_response(r, f"buy item {item_id}")
+        return self._handle_response(r, f"apply loadout {set_id} to leek {leek_id}")
 
     # =========================================================================
     # Helpers

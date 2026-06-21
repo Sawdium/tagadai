@@ -3,7 +3,7 @@
 ## General Principles
 
 - When asked for a code change, prefer the **simplest possible solution** (often a one-line fix). Do NOT propose complex refactors, new fields, or architectural changes unless explicitly asked. Ask before adding complexity.
-- This project uses **LeekScript, NOT JavaScript**. LeekScript does NOT support: `??` (nullish coalescing), `?.` (optional chaining), or standard JS Map/Set constructors. Always check LeekScript compatibility before using operators or APIs.
+- This project uses **LeekScript, NOT JavaScript**. LeekScript supports `??` and `??=` (null coalescing) but does NOT support: `?.` (optional chaining), or standard JS Map/Set constructors. Always check LeekScript compatibility before using operators or APIs.
 - For git commits: always use **selective staging** (`git add -p` or specific files). Never commit unrelated changes. Stay in the repo root directory — do not `cd` into subdirectories for git operations. When proposing commit splits, verify files aren't too interleaved before promising N commits.
 - When debugging, **focus on the specific area pointed to**. If the first analysis doesn't find the bug, don't keep investigating the same path — step back and consider other root causes. When redirected, fully abandon the previous theory.
 
@@ -15,9 +15,11 @@ Credentials in `.env` (gitignored): `LEEKWARS_LOGIN`, `LEEKWARS_PASSWORD`. Load 
 
 ```bash
 python -m src.tools.status                       # Account status
-python -m src.tools.aisync list                  # List AI files with IDs
-python -m src.tools.aisync put <ai_id> tagadalive/<path>  # Upload
-python -m src.tools.aisync get <ai_id> -o tagadalive/<path>  # Download
+python -m src.tools.aisync list                  # List AI files by path
+python -m src.tools.aisync put <path> tagadalive/<path>   # Upload single file (e.g. main)
+python -m src.tools.aisync get <path> -o tagadalive/<path> # Download single file
+python -m src.tools.aisync sync tagadalive        # Compare local <-> remote
+python -m src.tools.aisync push tagadalive        # Bulk upload local tree
 python -m src.tools.fight                        # Free test fight vs Domingo
 python -m src.tools.fight --scenario 37772       # Test fight vs active opponent (RECOMMENDED)
 ```
@@ -60,12 +62,22 @@ python -m src.tools.fight --real [--farmer]      # REAL fight (costs 1 fight)
 python -m src.tools.fight --real --farmer --count 50  # Batch: 50 farmer fights
 
 # AI Sync
-python -m src.tools.aisync list                  # List files with IDs
-python -m src.tools.aisync get <id> [-o file]    # Download
-python -m src.tools.aisync put <id> <file>       # Upload
-python -m src.tools.aisync new <name>            # Create new
-python -m src.tools.aisync rename <id> <name>    # Rename
-python -m src.tools.aisync move <id> <folder>    # Move
+python -m src.tools.aisync list                  # List files by path
+python -m src.tools.aisync list --folders        # List folder paths
+python -m src.tools.aisync list --bin            # List files in bin
+python -m src.tools.aisync get <path> [-o file]  # Download (e.g. 'main' or 'Model/Combos/Action')
+python -m src.tools.aisync put <path> <file>     # Upload (use - for stdin)
+python -m src.tools.aisync new <path>            # Create new (path = folder/name)
+python -m src.tools.aisync rename <path> <new_name>  # Rename
+python -m src.tools.aisync mv <path> <dest>      # Move to folder ('' for root)
+python -m src.tools.aisync rm <path>             # Delete (moves to bin)
+python -m src.tools.aisync restore <trash_name>  # Restore from bin
+python -m src.tools.aisync mkdir <path>          # Create folder
+python -m src.tools.aisync rmdir <path>          # Delete folder
+python -m src.tools.aisync download <dir>        # Download everything
+python -m src.tools.aisync sync <dir>            # Compare local vs remote
+python -m src.tools.aisync push <dir>            # Bulk upload local tree
+python -m src.tools.aisync --account <login> <cmd>   # Switch account
 
 # Test Runner
 python -m src.tools.testrunner [--test testMain] [--list] [--setup] [--cleanup]
@@ -80,21 +92,33 @@ python -m src.tools.boss --with tagadanar         # Multi-account squad (same pa
 python -m src.tools.boss --with tagadanar,tagadalone  # Multiple extra accounts
 python -m src.tools.boss --boss 3 --with tagadanar --wait  # Full combo
 
-# Build Management
-python -m src.tools.build list                   # List all saved builds
-python -m src.tools.build list <leek>            # List builds for specific leek
-python -m src.tools.build save <leek> <name>     # Snapshot current build
-python -m src.tools.build show <leek> <name>     # Display build details
-python -m src.tools.build restore <leek> <name>  # Restore (with confirmation)
-python -m src.tools.build restore <leek> <name> --buy   # Auto-buy missing items from market
-python -m src.tools.build restore <leek> <name> --buy --yes  # Buy + skip confirmation
+# Loadouts (native build presets — the source of truth for builds; no local JSON)
+python -m src.tools.loadout list                 # List loadouts for account
+python -m src.tools.loadout save <leek>          # Snapshot leek's live build -> loadout (upsert by name)
+python -m src.tools.loadout save                 # Save every leek's live build
+python -m src.tools.loadout save <leek> --name <name>   # Save under a custom loadout name
+python -m src.tools.loadout apply <leek> <loadout>          # Equip loadout (gear only)
+python -m src.tools.loadout apply <leek> <loadout> --restat # Equip + reallocate stats (uses a restat potion)
+python -m src.tools.loadout --account <login> <cmd>         # Switch account
 
 # RL
 python -m src.tools.rl duel [--seed 42]
 python -m src.tools.rl scenario <yaml> -w 4
+
+# Editor Problems (headless browser — reads compiler warnings/errors/TODOs)
+python -m src.tools.editor                          # All problems, grouped by file
+python -m src.tools.editor Model/GameObject/Entity  # Only one AI file's problems
+python -m src.tools.editor --json                   # Machine-readable
+python -m src.tools.editor --account tagadanar      # Switch account
+python -m src.tools.editor --headed                 # Show the browser (debug)
 ```
 
-**CRITICAL: Upload Safety** — AI file IDs are sequential integers, easy to confuse. Always run `aisync list` (full output, not grep), verify ID-to-name mapping before upload, check "AI 'Name' is VALID" confirmation. Run test fight after bulk edits.
+> **Note**: `editor` is the only way to read LeekScript compiler warnings (e.g.
+> "comparison always false", "unnecessary non-null assertion") — the AI
+> read/write API does NOT return them. Requires `playwright` +
+> `playwright install chromium`.
+
+**CRITICAL: Upload Safety** — AI files are identified by their full path (e.g. `Model/Combos/Action`, `main`). Always run `aisync list` (full output, not grep) to verify paths before upload. `put` reports "'<path>' is VALID" or "'<path>' has ERRORS" after upload — check it. Run a test fight after bulk edits.
 
 ---
 
@@ -165,11 +189,11 @@ if (!testsDone) {
 
 1. **For standalone tests** (testing isolated functions):
    - Create file in `tagadalive/TESTS/` or `tagadalive/`
-   - Upload: `python -m src.tools.aisync new myTest` then `python -m src.tools.aisync put <id> tagadalive/TESTS/myTest`
+   - Upload: `python -m src.tools.aisync new TESTS/myTest` then `python -m src.tools.aisync put TESTS/myTest tagadalive/TESTS/myTest`
 
 2. **For integration tests** (testing AI classes):
    - Add test assertions to `tagadalive/testMain`
-   - Upload: `python -m src.tools.aisync put 452028 tagadalive/testMain`
+   - Upload: `python -m src.tools.aisync put testMain tagadalive/testMain`
 
 3. **Run tests**: `python -m src.tools.testrunner`
 
@@ -361,8 +385,13 @@ Key endpoints:
 - `GET /garden/get-leek-opponents/{leek_id}` / `get-farmer-opponents` / `get-composition-opponents/{id}`
 - `POST /garden/start-solo-fight/{leek_id}/{enemy_id}` / `start-farmer-fight` / `start-team-fight`
 - `GET /fight/get/{fight_id}` (add `?logs=true` for debug output)
-- `GET /ai/get-farmer-ais` / `GET /ai/get/{id}` / `POST /ai/save` (body: `{ai_id, code}`)
-- `POST /ai/new/{folder_id}/false` (body: `{name, version:"11"}`) / `POST /ai/rename` (body: `{ai_id, name}`)
+- AI tree (files + folders + bin + leek_ais): embedded in `POST /farmer/login-token` response under `farmer.ai_tree`
+- `POST /ai/read` (body: `{path}`) → `{code}`
+- `POST /ai/write` (body: `{path, code}`) → `{result, modified}`
+- `POST /ai/create` (body: `{folder, name, version}`) — folder `""` = root
+- `POST /ai/rename` (body: `{path, new_name}`), `POST /ai/move` (body: `{path, dest}`)
+- `DELETE /ai/delete` (json: `{path}`) → `{trash_name}`, `POST /ai/restore` (body: `{trash_name}`)
+- `POST /ai-folder/create` / `rename` / `DELETE /ai-folder/delete` — all take `{path}`
 
 ---
 
