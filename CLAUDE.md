@@ -433,7 +433,7 @@ Winner: -1=pending, 0=draw, 1=team1, 2=team2.
 // Movement: getMP(), moveToward(entity[, n]), moveAwayFrom(entity), moveTowardCell(cell), getCellDistance(c1, c2)
 // Combat: getTP(), getNearestEnemy(), getEnemies(), getAllies(), setWeapon(WEAPON), useWeapon(entity), useChip(CHIP, entity)
 // Weapon/Chip info: getWeaponCost/MinRange/MaxRange(weapon), getChipCost(chip)
-// Debug: debug(v), debugW(v), debugE(v) — FREE. say(msg) costs 1 TP — avoid!
+// Debug: debug(v), debugW(v), debugE(v) — cost operations (arg string building + the call), but NO TP. say(msg) costs 1 TP — avoid! Gate hot-loop debug behind Benchmark.DEBUG_VERBOSE.
 // Utility: randInt(min, max), arraySort(array, key)
 ```
 
