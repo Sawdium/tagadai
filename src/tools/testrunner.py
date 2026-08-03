@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.common import LeekWarsAPI, load_credentials
-from src.common.errors import TagadAIError
+from src.common.errors import TagadAIError, APIError
 from src.tools.fight import wait_for_fight, fetch_fight_logs
 
 # Test configuration
@@ -31,24 +31,33 @@ DUMMY_AI_NAME = "dummyAI"
 DUMMY_LEEK_NAME = "TestDummy"
 
 
-def get_api() -> tuple[LeekWarsAPI, dict]:
-    """Initialize API and login."""
+def get_api(account: Optional[str] = None) -> tuple[LeekWarsAPI, dict]:
+    """Initialize API and login. Optionally override LEEKWARS_LOGIN."""
     try:
         login, password = load_credentials()
     except TagadAIError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if account:
+        login = account
     api = LeekWarsAPI()
     farmer = api.login(login, password)
     return api, farmer
 
 
 def find_ai_by_name(api: LeekWarsAPI, name: str) -> Optional[dict]:
-    """Find an AI by name."""
-    ai_data = api.get_farmer_ais()
-    for ai in ai_data.get("ais", []):
-        if ai.get("name") == name:
+    """Find an AI by bare filename (last path segment). Returns file metadata dict."""
+    for ai in api.list_ais():
+        if ai.get("path", "").rsplit("/", 1)[-1] == name:
+            return ai
+    return None
+
+
+def find_ai_by_path(api: LeekWarsAPI, path: str) -> Optional[dict]:
+    """Find an AI by exact full path."""
+    for ai in api.list_ais():
+        if ai.get("path") == path:
             return ai
     return None
 
@@ -77,19 +86,16 @@ def setup_test_scenario(api: LeekWarsAPI, farmer: dict) -> dict:
     dummy_ai = find_ai_by_name(api, DUMMY_AI_NAME)
     if not dummy_ai:
         print("ERROR: dummyAI not found. Please upload TESTS/dummyAI first.", file=sys.stderr)
-        print("  Run: python -m src.tools.aisync new dummyAI", file=sys.stderr)
-        print("  Then: python -m src.tools.aisync put <id> tagadalive/TESTS/dummyAI", file=sys.stderr)
+        print("  Run: python -m src.tools.aisync new TESTS/dummyAI", file=sys.stderr)
+        print("  Then: python -m src.tools.aisync put TESTS/dummyAI tagadalive/TESTS/dummyAI", file=sys.stderr)
         sys.exit(1)
 
-    dummy_ai_id = dummy_ai["id"]
-    print(f"  Found dummyAI (id:{dummy_ai_id})", file=sys.stderr)
+    dummy_ai_path = dummy_ai["path"]
+    print(f"  Found dummyAI ({dummy_ai_path})", file=sys.stderr)
 
-    # Create scenario
+    # Create scenario (api raises on error)
     result = api.create_test_scenario(TEST_SCENARIO_NAME)
-    if "error" in result:
-        raise Exception(f"Failed to create scenario: {result}")
-
-    scenario_id = result.get("scenario", {}).get("id") or result.get("id")
+    scenario_id = result["id"]
     print(f"  Created scenario: {TEST_SCENARIO_NAME} (id:{scenario_id})", file=sys.stderr)
 
     # Get our leek
@@ -101,34 +107,24 @@ def setup_test_scenario(api: LeekWarsAPI, farmer: dict) -> dict:
     print(f"  Our leek: {our_leek['name']} (id:{our_leek_id})", file=sys.stderr)
 
     # Create dummy test leek for opponent
-    result = api.create_test_leek(DUMMY_LEEK_NAME)
-    if "error" in result:
-        # Might already exist, try to find it
-        scenarios = api.get_test_scenarios()
-        test_leeks = scenarios.get("leeks", [])
-        dummy_leek = None
-        for l in test_leeks:
-            if l.get("name") == DUMMY_LEEK_NAME:
-                dummy_leek = l
-                break
+    try:
+        tl = api.create_test_leek(DUMMY_LEEK_NAME)
+        dummy_leek_id = tl["id"]
+    except APIError:
+        # May already exist — search existing test leeks
+        test_leeks = api.get_test_scenarios().get("leeks", [])
+        dummy_leek = next((l for l in test_leeks if l.get("name") == DUMMY_LEEK_NAME), None)
         if not dummy_leek:
-            raise Exception(f"Failed to create test leek: {result}")
+            raise
         dummy_leek_id = dummy_leek["id"]
-    else:
-        dummy_leek_id = result.get("leek", {}).get("id") or result.get("id")
     print(f"  Dummy leek: {DUMMY_LEEK_NAME} (id:{dummy_leek_id})", file=sys.stderr)
 
-    # Add our leek to team 1 (AI will be set per-test)
-    # We'll use a placeholder AI for now
-    our_ai_id = our_leek.get("ai", dummy_ai_id)
-    result = api.add_leek_to_scenario(scenario_id, our_leek_id, team=1, ai_id=our_ai_id)
-    if "error" in result:
-        print(f"  Warning adding our leek: {result}", file=sys.stderr)
+    # Add our leek to team 1 (AI will be set per-test via start_test_fight)
+    our_ai_path = api.get_leek_ai_paths().get(our_leek_id) or dummy_ai_path
+    api.add_leek_to_scenario(scenario_id, our_leek_id, team=1, ai=our_ai_path)
 
     # Add dummy leek to team 2 with dummy AI
-    result = api.add_leek_to_scenario(scenario_id, dummy_leek_id, team=2, ai_id=dummy_ai_id)
-    if "error" in result:
-        print(f"  Warning adding dummy leek: {result}", file=sys.stderr)
+    api.add_leek_to_scenario(scenario_id, dummy_leek_id, team=2, ai=dummy_ai_path)
 
     print(f"  Test scenario ready!", file=sys.stderr)
 
@@ -202,13 +198,14 @@ def parse_test_output(api_logs: dict) -> list[dict]:
     return results
 
 
-def run_test(api: LeekWarsAPI, farmer: dict, ai_id: int, ai_name: str, scenario_id: int = 0) -> dict:
+def run_test(api: LeekWarsAPI, farmer: dict, ai_path: str, scenario_id: int = 0) -> dict:
     """Run a single test AI and return results."""
-    print(f"Running test: {ai_name} (id:{ai_id})...", file=sys.stderr)
+    ai_name = ai_path.rsplit("/", 1)[-1]
+    print(f"Running test: {ai_path}...", file=sys.stderr)
 
     try:
         # Start test fight
-        fight_id = api.start_test_fight(ai_id, scenario_id=scenario_id)
+        fight_id = api.start_test_fight(ai_path, scenario_id=scenario_id)
         print(f"  Fight #{fight_id} started", file=sys.stderr)
 
         # Wait for completion
@@ -238,7 +235,7 @@ def run_test(api: LeekWarsAPI, farmer: dict, ai_id: int, ai_name: str, scenario_
 
         return {
             "ai_name": ai_name,
-            "ai_id": ai_id,
+            "ai_path": ai_path,
             "fight_id": fight_id,
             "success": len(errors) == 0,
             "errors": errors,
@@ -250,7 +247,7 @@ def run_test(api: LeekWarsAPI, farmer: dict, ai_id: int, ai_name: str, scenario_
     except Exception as e:
         return {
             "ai_name": ai_name,
-            "ai_id": ai_id,
+            "ai_path": ai_path,
             "fight_id": None,
             "success": False,
             "errors": [{"type": "exception", "description": str(e)}],
@@ -261,17 +258,13 @@ def run_test(api: LeekWarsAPI, farmer: dict, ai_id: int, ai_name: str, scenario_
 
 
 def list_test_ais(api: LeekWarsAPI) -> list[dict]:
-    """List all AI files that look like tests."""
-    ai_data = api.get_farmer_ais()
+    """List AI files that look like tests."""
     tests = []
-
-    for ai in ai_data.get("ais", []):
-        name = ai.get("name", "")
-        # Match test files: test_*, *Test, simpleTest, etc.
+    for ai in api.list_ais():
+        name = ai.get("path", "").rsplit("/", 1)[-1]
         if name.startswith("test_") or name.endswith("Test") or "test" in name.lower():
             if name != "mainTest":  # Skip the full test suite
                 tests.append(ai)
-
     return tests
 
 
@@ -352,9 +345,10 @@ def main():
     parser.add_argument("--setup", action="store_true", help="Setup test scenario")
     parser.add_argument("--cleanup", action="store_true", help="Remove test scenario")
     parser.add_argument("--scenario", type=int, default=0, help="Scenario ID (0=Domingo)")
+    parser.add_argument("--account", help="Override LEEKWARS_LOGIN (password from .env)")
     args = parser.parse_args()
 
-    api, farmer = get_api()
+    api, farmer = get_api(args.account)
     print("Logged in.", file=sys.stderr)
 
     if args.cleanup:
@@ -370,7 +364,7 @@ def main():
         print("Available tests:")
         for t in tests:
             valid = "VALID" if t.get("valid") else "INVALID"
-            print(f"  {t['name']} (id:{t['id']}) [{valid}]")
+            print(f"  {t['path']} [{valid}]")
         return
 
     # Get scenario ID (use custom or default to Domingo)
@@ -378,7 +372,8 @@ def main():
 
     # Find tests to run
     if args.test:
-        ai = find_ai_by_name(api, args.test)
+        # Accept either full path or bare name
+        ai = find_ai_by_path(api, args.test) or find_ai_by_name(api, args.test)
         if not ai:
             print(f"ERROR: Test '{args.test}' not found", file=sys.stderr)
             sys.exit(1)
@@ -393,10 +388,10 @@ def main():
     all_results = []
     for i, test_ai in enumerate(tests):
         if not test_ai.get("valid"):
-            print(f"Skipping invalid AI: {test_ai['name']}", file=sys.stderr)
+            print(f"Skipping invalid AI: {test_ai['path']}", file=sys.stderr)
             continue
 
-        result = run_test(api, farmer, test_ai["id"], test_ai["name"], scenario_id)
+        result = run_test(api, farmer, test_ai["path"], scenario_id)
         all_results.append(result)
 
         # Rate limit: wait between tests to avoid API overload

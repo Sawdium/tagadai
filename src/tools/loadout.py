@@ -60,7 +60,7 @@ COSTS = {
 # Innate (free) characteristic floor a fresh leek has before spending capital.
 # Capital only pays for points bought above this baseline.
 BASELINE = {
-    "life": 0, "strength": 0, "wisdom": 0, "agility": 0, "resistance": 0,
+    "life": 1000, "strength": 0, "wisdom": 0, "agility": 0, "resistance": 0,
     "science": 0, "magic": 0, "frequency": 100, "tp": 10, "mp": 3,
     "cores": 1, "ram": 6,
 }

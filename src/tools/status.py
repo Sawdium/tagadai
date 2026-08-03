@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Account Status Tool - Displays current state of LeekWars account.
+Account Status Tool — displays current state of a LeekWars account.
 
 Usage:
-    python -m src.tools.status          # Human-readable output
-    python -m src.tools.status --json   # JSON output for programmatic use
+    python -m src.tools.status          # Human-readable
+    python -m src.tools.status --json   # JSON
+    python -m src.tools.status --account tagadalton   # Switch account
 """
 
-import sys
-import json
 import argparse
-from dataclasses import dataclass, asdict
-from typing import Optional
+import json
+import sys
+from dataclasses import asdict, dataclass, field
 
 from src.common import LeekWarsAPI, load_credentials
 from src.common.errors import TagadAIError
@@ -24,18 +24,18 @@ class LeekInfo:
     level: int
     talent: int
     capital: int
-    ai_id: Optional[int]
-    ai_name: Optional[str]
+    ai_path: str | None     # From ai_tree.leek_ais (canonical)
     in_garden: bool
 
 
 @dataclass
 class AIFile:
-    id: int
-    name: str
+    path: str
     version: int
     valid: bool
-    folder_id: int
+    total_lines: int
+    total_chars: int
+    scenario: int | None = None
 
 
 @dataclass
@@ -48,62 +48,46 @@ class AccountStatus:
     crystals: int
     fights_available: int
     in_garden: bool
-    team_id: Optional[int]
-    team_name: Optional[str]
+    team_id: int | None
+    team_name: str | None
     leeks: list[LeekInfo]
     ai_files: list[AIFile]
-    ai_folders: list[dict]
+    ai_folders: list[str]
+    ai_bin: list[dict] = field(default_factory=list)
 
 
 def get_status(api: LeekWarsAPI) -> AccountStatus:
-    """Fetch and compile complete account status."""
     farmer = api.farmer
+    tree = api.get_ai_tree()
+    leek_ai_map = api.get_leek_ai_paths()
 
-    # Get AI files
-    ai_data = api.get_farmer_ais()
-    ai_files = []
-    ai_folders = []
-    ai_map = {}  # id -> name mapping
+    ai_files = [
+        AIFile(
+            path=f["path"],
+            version=f.get("version", 4),
+            valid=f.get("valid", False),
+            total_lines=f.get("total_lines", 0),
+            total_chars=f.get("total_chars", 0),
+            scenario=f.get("scenario"),
+        )
+        for f in tree.get("files", [])
+    ]
 
-    for ai in ai_data.get("ais", []):
-        ai_files.append(AIFile(
-            id=ai["id"],
-            name=ai["name"],
-            version=ai.get("version", 1),
-            valid=ai.get("valid", False),
-            folder_id=ai.get("folder", 0)
-        ))
-        ai_map[ai["id"]] = ai["name"]
-
-    for folder in ai_data.get("folders", []):
-        ai_folders.append({
-            "id": folder["id"],
-            "name": folder["name"],
-            "parent": folder.get("folder", 0)
-        })
-
-    # Build leek info
     leeks = []
-    for leek_id, leek in farmer.get("leeks", {}).items():
-        ai_id = leek.get("ai")
+    for leek_id, leek in (farmer.get("leeks") or {}).items():
+        lid = int(leek_id)
         leeks.append(LeekInfo(
-            id=int(leek_id),
+            id=lid,
             name=leek["name"],
             level=leek["level"],
             talent=leek["talent"],
             capital=leek["capital"],
-            ai_id=ai_id,
-            ai_name=ai_map.get(ai_id) if ai_id else None,
-            in_garden=leek.get("in_garden", False)
+            ai_path=leek_ai_map.get(lid),
+            in_garden=leek.get("in_garden", False),
         ))
-
-    # Sort leeks by level descending
     leeks.sort(key=lambda x: x.level, reverse=True)
 
-    # Team info
-    team_id = farmer.get("team", {}).get("id") if farmer.get("team") else None
-    team_name = farmer.get("team", {}).get("name") if farmer.get("team") else None
-
+    team = farmer.get("team") or {}
     return AccountStatus(
         farmer_id=farmer["id"],
         farmer_name=farmer["login"],
@@ -113,90 +97,84 @@ def get_status(api: LeekWarsAPI) -> AccountStatus:
         crystals=farmer.get("crystals", 0),
         fights_available=farmer["fights"],
         in_garden=farmer.get("in_garden", 0) == 1,
-        team_id=team_id,
-        team_name=team_name,
+        team_id=team.get("id"),
+        team_name=team.get("name"),
         leeks=leeks,
         ai_files=ai_files,
-        ai_folders=ai_folders
+        ai_folders=sorted(tree.get("folders", [])),
+        ai_bin=list(tree.get("bin", [])),
     )
 
 
-def format_human_readable(status: AccountStatus) -> str:
-    """Format status for human reading."""
+def format_human_readable(s: AccountStatus) -> str:
     lines = []
-
-    # Header
     lines.append("=" * 60)
-    lines.append(f"ACCOUNT: {status.farmer_name} (ID: {status.farmer_id})")
+    lines.append(f"ACCOUNT: {s.farmer_name} (ID: {s.farmer_id})")
     lines.append("=" * 60)
 
-    # Farmer stats
     lines.append("")
     lines.append("FARMER STATS:")
-    lines.append(f"  Talent:      {status.talent}")
-    lines.append(f"  Total Level: {status.total_level}")
-    lines.append(f"  Habs:        {status.habs:,}")
-    lines.append(f"  Crystals:    {status.crystals}")
-    lines.append(f"  Fights:      {status.fights_available}")
-    lines.append(f"  In Garden:   {'Yes' if status.in_garden else 'No'}")
-    if status.team_name:
-        lines.append(f"  Team:        {status.team_name} (ID: {status.team_id})")
+    lines.append(f"  Talent:      {s.talent}")
+    lines.append(f"  Total Level: {s.total_level}")
+    lines.append(f"  Habs:        {s.habs:,}")
+    lines.append(f"  Crystals:    {s.crystals}")
+    lines.append(f"  Fights:      {s.fights_available}")
+    lines.append(f"  In Garden:   {'Yes' if s.in_garden else 'No'}")
+    if s.team_name:
+        lines.append(f"  Team:        {s.team_name} (ID: {s.team_id})")
 
-    # Leeks
     lines.append("")
-    lines.append(f"LEEKS ({len(status.leeks)}):")
-    for leek in status.leeks:
-        garden_mark = "[G]" if leek.in_garden else "[ ]"
-        capital_warn = f" (!!{leek.capital} capital)" if leek.capital > 0 else ""
-        ai_info = f" -> {leek.ai_name}" if leek.ai_name else " -> NO AI"
-        lines.append(f"  {garden_mark} {leek.name} Lv{leek.level} (T:{leek.talent}){capital_warn}{ai_info}")
+    lines.append(f"LEEKS ({len(s.leeks)}):")
+    for leek in s.leeks:
+        gm = "[G]" if leek.in_garden else "[ ]"
+        cap = f" (!!{leek.capital} capital)" if leek.capital > 0 else ""
+        ai = f" -> {leek.ai_path}" if leek.ai_path else " -> NO AI"
+        lines.append(f"  {gm} {leek.name} Lv{leek.level} (T:{leek.talent}){cap}{ai}")
 
-    # AI Files summary
     lines.append("")
-    valid_count = sum(1 for ai in status.ai_files if ai.valid)
-    lines.append(f"AI FILES ({len(status.ai_files)} total, {valid_count} valid):")
+    valid = sum(1 for ai in s.ai_files if ai.valid)
+    lines.append(f"AI FILES ({len(s.ai_files)} total, {valid} valid):")
 
-    # Group by folder
-    folders_dict = {0: "root"}
-    for folder in status.ai_folders:
-        folders_dict[folder["id"]] = folder["name"]
+    by_folder: dict[str, list[AIFile]] = {}
+    for ai in s.ai_files:
+        folder = ai.path.rsplit("/", 1)[0] if "/" in ai.path else ""
+        by_folder.setdefault(folder, []).append(ai)
 
-    by_folder: dict[int, list[AIFile]] = {}
-    for ai in status.ai_files:
-        by_folder.setdefault(ai.folder_id, []).append(ai)
+    for folder in sorted(by_folder):
+        label = folder if folder else "(root)"
+        lines.append(f"  [{label}]")
+        for ai in sorted(by_folder[folder], key=lambda x: x.path):
+            name = ai.path.rsplit("/", 1)[-1]
+            mark = "+" if ai.valid else "-"
+            lines.append(f"    {mark} {name} (v{ai.version}, {ai.total_lines} lines)")
 
-    for folder_id, ais in sorted(by_folder.items()):
-        folder_name = folders_dict.get(folder_id, f"folder_{folder_id}")
-        lines.append(f"  [{folder_name}]")
-        for ai in sorted(ais, key=lambda x: x.name):
-            valid_mark = "+" if ai.valid else "-"
-            lines.append(f"    {valid_mark} {ai.name} (v{ai.version}, id:{ai.id})")
+    if s.ai_bin:
+        lines.append("")
+        lines.append(f"BIN ({len(s.ai_bin)}):")
+        for b in s.ai_bin:
+            lines.append(f"  - {b['path']}")
 
     lines.append("")
     lines.append("=" * 60)
-
     return "\n".join(lines)
-
-
-def to_json(status: AccountStatus) -> str:
-    """Convert status to JSON string."""
-    data = asdict(status)
-    return json.dumps(data, indent=2)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Display LeekWars account status")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--account", help="Override LEEKWARS_LOGIN (password from .env)")
     args = parser.parse_args()
 
     try:
         login, password = load_credentials()
+        if args.account:
+            login = args.account
         api = LeekWarsAPI()
         api.login(login, password)
         status = get_status(api)
 
         if args.json:
-            print(to_json(status))
+            print(json.dumps(asdict(status), indent=2))
         else:
             print(format_human_readable(status))
 

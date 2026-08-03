@@ -117,22 +117,30 @@ class BossFighter:
 
     def run(self):
         locked = len(self.extra_accounts) == 0
-        ws = websocket.create_connection(
-            "wss://leekwars.com/ws",
-            timeout=15,
-            header=[f"Sec-WebSocket-Protocol: leek-wars, {self.token}"],
-        )
+        # Connect inside the error path: a timeout here must feed the caller's
+        # retry loop, not crash the process and lose the run.
+        try:
+            ws = websocket.create_connection(
+                "wss://leekwars.com/ws",
+                timeout=15,
+                header=[f"Sec-WebSocket-Protocol: leek-wars, {self.token}"],
+            )
+        except Exception as e:
+            self.error = f"Connect failed: {e}"
+            print(f"  {self.error}")
+            self.done.set()
+            return None
         print("  WebSocket connected")
 
-        # Leave any orphaned squad from a previous session
-        ws.send(json.dumps([GARDEN_BOSS_LEAVE_SQUAD]))
-        time.sleep(1)
-
-        print(f"  Creating squad for {BOSS_NAMES.get(self.boss_id, f'Boss {self.boss_id}')}...")
-        ws.send(json.dumps([GARDEN_BOSS_CREATE_SQUAD, self.boss_id, locked, self.leek_ids]))
-
-        ws.settimeout(30)
         try:
+            # Leave any orphaned squad from a previous session
+            ws.send(json.dumps([GARDEN_BOSS_LEAVE_SQUAD]))
+            time.sleep(1)
+
+            print(f"  Creating squad for {BOSS_NAMES.get(self.boss_id, f'Boss {self.boss_id}')}...")
+            ws.send(json.dumps([GARDEN_BOSS_CREATE_SQUAD, self.boss_id, locked, self.leek_ids]))
+
+            ws.settimeout(30)
             for _ in range(40):
                 msg = ws.recv()
                 data = json.loads(msg)
@@ -157,20 +165,16 @@ class BossFighter:
                         for acc in self.extra_accounts:
                             expected_count += len(acc["leek_ids"])
 
-                        # Launch join threads with ready events
-                        ready_events = []
+                        # Join accounts one at a time: lobby order = fight order,
+                        # so parallel joins would randomize the leek play order.
                         for account in self.extra_accounts:
                             evt = threading.Event()
-                            ready_events.append(evt)
                             t = threading.Thread(
                                 target=self._join_squad,
                                 args=(str(squad_id), account, evt),
                                 daemon=True,
                             )
                             t.start()
-
-                        # Wait for all accounts to signal ready (joined + leeks added)
-                        for evt in ready_events:
                             evt.wait(timeout=15)
 
                         self.extra_accounts = []

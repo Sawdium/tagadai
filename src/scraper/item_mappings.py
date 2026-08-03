@@ -210,3 +210,91 @@ def get_chip_info(chip_id: int) -> dict:
 def get_chip_type_name(type_id: int) -> str:
     """Get chip type name."""
     return CHIP_TYPES.get(type_id, "unknown")
+
+
+# Item template ID -> name mapping (unified namespace used by leek equipment API)
+# Source: /api/item/get-all (fetched 2026-03-10)
+# Covers weapons, chips, components, hats, potions, pomps, materials, etc.
+ITEM_TEMPLATES = {
+    1: "chip_shock", 2: "chip_ice", 3: "chip_bandage", 4: "chip_cure",
+    5: "chip_flame", 6: "chip_flash", 7: "chip_rock", 8: "chip_protein",
+    9: "chip_stretching", 10: "chip_drip", 11: "chip_vaccine",
+    12: "chip_seven_league_boots", 13: "chip_winged_boots", 14: "chip_leather_boots",
+    15: "chip_motivation", 16: "chip_adrenaline", 17: "chip_rage", 18: "chip_spark",
+    19: "chip_pebble", 20: "chip_shield", 21: "chip_helmet", 22: "chip_armor",
+    23: "chip_wall", 24: "chip_rampart", 25: "chip_steroid", 26: "chip_doping",
+    27: "chip_reflexes", 28: "chip_warm_up", 29: "chip_fortress",
+    30: "chip_stalactite", 31: "chip_iceberg", 32: "chip_rockfall",
+    33: "chip_lightning", 34: "chip_liberation", 35: "chip_regeneration",
+    36: "chip_meteorite", 37: "weapon_pistol", 38: "weapon_machine_gun",
+    39: "weapon_double_gun", 40: "weapon_destroyer", 41: "weapon_shotgun",
+    42: "weapon_laser", 43: "weapon_grenade_launcher", 44: "weapon_electrisor",
+    45: "weapon_magnum", 46: "weapon_flame_thrower", 47: "weapon_m_laser",
+    48: "weapon_gazor", 59: "chip_teleportation", 60: "weapon_b_laser",
+    67: "chip_armoring", 68: "chip_inversion", 73: "chip_puny_bulb",
+    74: "chip_fire_bulb", 75: "chip_healer_bulb", 76: "chip_rocky_bulb",
+    77: "chip_iced_bulb", 78: "chip_lightning_bulb", 79: "chip_metallic_bulb",
+    80: "chip_remission", 81: "chip_carapace", 84: "chip_resurrection",
+    85: "chip_devil_strike", 88: "chip_whip", 89: "chip_loam",
+    90: "chip_fertilizer", 91: "chip_acceleration", 92: "chip_slow_down",
+    93: "chip_ball_and_chain", 94: "chip_tranquilizer", 95: "chip_soporific",
+    96: "chip_solidification", 97: "chip_venom", 98: "chip_toxin",
+    99: "chip_plague", 100: "chip_thorn", 101: "chip_mirror",
+    102: "chip_ferocity", 103: "chip_collar", 104: "chip_bark",
+    105: "chip_burning", 106: "chip_fracture", 107: "weapon_katana",
+    108: "weapon_broadsword", 109: "weapon_axe", 110: "chip_antidote",
+    114: "chip_punishment", 115: "weapon_j_laser",
+    116: "weapon_illicit_grenade_launcher", 117: "weapon_mysterious_electrisor",
+    118: "weapon_unbridled_gazor", 119: "weapon_revoked_m_laser",
+    120: "chip_covetousness", 121: "chip_vampirization", 122: "chip_precipitation",
+    141: "chip_alteration", 142: "chip_wizard_bulb", 143: "chip_plasma",
+    144: "chip_jump", 151: "weapon_rifle", 152: "chip_covid",
+    153: "weapon_rhino", 154: "chip_elevation", 155: "chip_knowledge",
+    156: "chip_wizardry", 157: "chip_repotting", 158: "chip_therapy",
+    159: "chip_mutation", 160: "chip_desintegration", 161: "chip_transmutation",
+    162: "chip_grapple", 163: "chip_boxing_glove", 166: "chip_tactician_bulb",
+    167: "chip_savant_bulb", 168: "chip_serum", 169: "chip_crushing",
+    170: "chip_brainwashing", 171: "chip_arsenic", 172: "chip_bramble",
+    173: "chip_dome", 174: "chip_manumission", 175: "weapon_explorer_rifle",
+    180: "weapon_lightninger", 182: "weapon_neutrino", 184: "weapon_bazooka",
+    187: "weapon_dark_katana", 225: "weapon_enhanced_lightninger",
+    226: "weapon_unstable_destroyer", 276: "chip_prism", 277: "weapon_sword",
+    278: "weapon_heavy_sword",
+    # Components
+    290: "core", 291: "core2", 292: "core3",
+    293: "battery", 294: "iron_plate", 295: "amazonite_plate",
+    296: "obsidian_plate", 297: "spring", 298: "copper_spring",
+    299: "elinvar_spring", 300: "ssd", 301: "nuclear_core",
+    302: "fan", 303: "sdcard", 304: "cd",
+    305: "neural_core", 306: "neural_core_pro", 307: "power_supply",
+    308: "chiyembekezo", 309: "uzoma", 310: "kirabo",
+    311: "limbani", 312: "thokozani", 313: "ram",
+    314: "ram2", 315: "ram3", 316: "motherboard",
+    317: "propulsor", 318: "propulsor2", 319: "morus",
+    320: "hylocereus", 321: "apple", 322: "nephelium",
+    323: "blue_mango", 324: "watercooling", 374: "soursop",
+    375: "hokajin", 381: "motherboard2", 382: "motherboard3",
+    383: "switch", 384: "switch2", 385: "rgb",
+    406: "recovery_core", 407: "recovery_ram",
+    408: "weapon_odachi", 409: "weapon_excalibur", 410: "weapon_scythe",
+    411: "chip_shuriken", 412: "chip_kemuridama", 413: "chip_fire_ball",
+    414: "chip_trebuchet", 415: "chip_awakening", 416: "chip_thunder",
+    417: "chip_kill", 418: "chip_apocalypse", 419: "chip_divine_protection",
+    425: "chip_exasperation", 428: "weapon_quantum_rifle",
+}
+
+
+def get_item_name(item_template_id: int) -> str:
+    """Get human-readable item name from item template ID (unified namespace).
+
+    Strips the type prefix (weapon_, chip_) and replaces underscores with spaces.
+    Returns 'unknown_<id>' for unmapped IDs.
+    """
+    raw = ITEM_TEMPLATES.get(item_template_id)
+    if raw is None:
+        return f"unknown_{item_template_id}"
+    # Strip type prefix for readability
+    for prefix in ("weapon_", "chip_", "component_"):
+        if raw.startswith(prefix):
+            return raw[len(prefix):].replace("_", " ")
+    return raw.replace("_", " ")

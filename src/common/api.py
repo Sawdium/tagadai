@@ -574,6 +574,24 @@ class LeekWarsAPI:
         )
         return self._handle_response(r, f"apply loadout {set_id} to leek {leek_id}")
 
+    def use_potion(self, leek_id: int, potion_id: int) -> dict:
+        """Use a potion instance on a leek (e.g. a restat potion to refund all
+        spent characteristic capital back to base)."""
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/use-potion",
+            data={"leek_id": leek_id, "potion_id": potion_id}
+        )
+        return self._handle_response(r, f"use potion {potion_id} on leek {leek_id}")
+
+    def add_weapon(self, leek_id: int, weapon_id: int) -> dict:
+        """Equip a weapon INSTANCE (owned id, not template) on a leek. Needed for
+        non-storable weapons (illicit/reward) that loadout apply won't re-equip."""
+        r = self.session.post(
+            f"{self.BASE_URL}/leek/add-weapon",
+            data={"leek_id": leek_id, "weapon_id": weapon_id}
+        )
+        return self._handle_response(r, f"add weapon {weapon_id} to leek {leek_id}")
+
     # =========================================================================
     # Helpers
     # =========================================================================

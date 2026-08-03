@@ -1,395 +1,380 @@
 #!/usr/bin/env python3
 """
-AI Sync Tool - Manage AI code files on LeekWars.
+AI Sync Tool — manage LeekScript AI files on LeekWars (path-based API).
+
+Everything is addressed by path now (no integer IDs). The root folder is "".
+Folders are created implicitly by file creation only if the parent exists;
+use `mkdir` for new folder hierarchies.
 
 Usage:
-    python -m src.tools.aisync list                     # List all AI files
-    python -m src.tools.aisync list --folders           # List folders with IDs
-    python -m src.tools.aisync get <ai_id>              # Download AI code to stdout
-    python -m src.tools.aisync get <ai_id> -o file.ls   # Download AI code to file
-    python -m src.tools.aisync put <ai_id> <file>       # Upload code from file to AI
-    python -m src.tools.aisync put <ai_id> -            # Upload code from stdin to AI
-    python -m src.tools.aisync new <name> [folder]      # Create new AI file (folder by path or id)
-    python -m src.tools.aisync rename <ai_id> <name>    # Rename AI file
-    python -m src.tools.aisync move <ai_id> <folder>    # Move AI to folder (path or id)
-    python -m src.tools.aisync mkdir <name> [parent_id] # Create folder
-    python -m src.tools.aisync delete <ai_id>           # Delete AI file
-    python -m src.tools.aisync download <dir>           # Download all AI files to directory
+    python -m src.tools.aisync list [--json] [--folders] [--bin]
+    python -m src.tools.aisync get <path> [-o file]          # - or omit = stdout
+    python -m src.tools.aisync put <path> <file>             # file can be -
+    python -m src.tools.aisync new <path> [--version 4]      # path = folder/name
+    python -m src.tools.aisync rename <path> <new_name>
+    python -m src.tools.aisync mv <path> <dest_folder>       # dest "" = root
+    python -m src.tools.aisync rm <path>
+    python -m src.tools.aisync restore <trash_name>
+    python -m src.tools.aisync mkdir <path>
+    python -m src.tools.aisync rmdir <path>
+    python -m src.tools.aisync download <dir>
+    python -m src.tools.aisync sync <dir> [--account login]  # compare local<->remote
 """
 
-import sys
-import json
 import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
 
 from src.common import LeekWarsAPI, load_credentials
 from src.common.errors import TagadAIError
 
 
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+
 def cmd_list(api: LeekWarsAPI, args):
-    """List all AI files."""
-    data = api.get_farmer_ais()
-
-    # Build folder map
-    folders = {0: {"name": "(root)", "parent": None}}
-    for folder in data.get("folders", []):
-        folders[folder["id"]] = {
-            "name": folder["name"],
-            "parent": folder.get("folder", 0)
-        }
-
-    # Get folder path
-    def get_path(folder_id: int) -> str:
-        if folder_id == 0:
-            return ""
-        parts = []
-        current = folder_id
-        while current != 0 and current in folders:
-            parts.append(folders[current]["name"])
-            current = folders[current]["parent"] or 0
-        return "/".join(reversed(parts))
-
-    # Group AIs by folder
-    by_folder: dict[int, list] = {}
-    for ai in data.get("ais", []):
-        folder_id = ai.get("folder", 0)
-        by_folder.setdefault(folder_id, []).append(ai)
-
+    tree = api.get_ai_tree()
     if args.json:
-        print(json.dumps(data, indent=2))
+        print(json.dumps(tree, indent=2))
         return
 
-    # Show folders only
     if args.folders:
+        folders = sorted(tree.get("folders", []))
         print("FOLDERS:")
         print("-" * 60)
-        print(f"  {'ID':>8}  {'Path':<40}")
-        print(f"  {0:>8}  {'(root)':<40}")
-        for fid in sorted(folders.keys()):
-            if fid == 0:
-                continue
-            path = get_path(fid)
-            print(f"  {fid:>8}  {path:<40}")
-        print(f"\nTotal: {len(folders) - 1} folders")
+        for f in folders:
+            print(f"  {f}")
+        print(f"\nTotal: {len(folders)} folders")
         return
 
-    # Print tree
+    if args.bin:
+        items = tree.get("bin", [])
+        print("BIN:")
+        print("-" * 60)
+        for b in items:
+            valid = "+" if b.get("valid") else "-"
+            print(f"  {valid} {b['path']:40}  v{b.get('version', '?')}")
+        print(f"\nTotal: {len(items)} in bin")
+        return
+
+    files = sorted(tree.get("files", []), key=lambda x: x["path"])
     print("AI FILES:")
     print("-" * 60)
-
-    for folder_id in sorted(by_folder.keys()):
-        ais = by_folder[folder_id]
-        path = get_path(folder_id) or "(root)"
-        print(f"\n[{path}]")
-
-        for ai in sorted(ais, key=lambda x: x["name"]):
-            valid = "+" if ai.get("valid") else "-"
-            version = ai.get("version", "?")
-            print(f"  {valid} {ai['name']:30} id:{ai['id']:8}  v{version}")
-
-    print()
-    print(f"Total: {len(data.get('ais', []))} files, {len(data.get('folders', []))} folders")
+    for f in files:
+        valid = "+" if f.get("valid") else "-"
+        v = f.get("version", "?")
+        lines = f.get("total_lines", "?")
+        print(f"  {valid} {f['path']:50}  v{v}  {lines} lines")
+    print(f"\nTotal: {len(files)} files, {len(tree.get('folders', []))} folders")
 
 
 def cmd_get(api: LeekWarsAPI, args):
-    """Download AI code."""
-    data = api.get_ai(args.ai_id)
-    code = data.get("ai", {}).get("code", "")
-
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(code)
-        print(f"Saved to {args.output}", file=sys.stderr)
+    code = api.read_ai(args.path)
+    if args.output and args.output != "-":
+        Path(args.output).write_text(code, encoding="utf-8")
+        print(f"Saved {len(code)} chars to {args.output}", file=sys.stderr)
     else:
-        print(code)
+        sys.stdout.write(code)
 
 
 def cmd_put(api: LeekWarsAPI, args):
-    """Upload code to AI."""
     if args.file == "-":
         code = sys.stdin.read()
     else:
-        with open(args.file, "r", encoding="utf-8") as f:
-            code = f.read()
+        code = Path(args.file).read_text(encoding="utf-8")
 
-    api.save_ai(args.ai_id, code)
-    print(f"Uploaded {len(code)} bytes to AI {args.ai_id}", file=sys.stderr)
+    api.write_ai(args.path, code)
+    print(f"Uploaded {len(code)} chars to '{args.path}'", file=sys.stderr)
 
-    # Check if it's valid now
-    data = api.get_farmer_ais()
-    for ai in data.get("ais", []):
-        if ai["id"] == args.ai_id:
-            if ai.get("valid"):
-                print(f"AI '{ai['name']}' is VALID", file=sys.stderr)
-            else:
-                print(f"AI '{ai['name']}' has ERRORS", file=sys.stderr)
-            break
+    # Fresh tree to report validity
+    api.refresh_farmer()
+    entry = next((f for f in api.list_ais() if f["path"] == args.path), None)
+    if entry is None:
+        print(f"WARN: '{args.path}' not in tree after upload", file=sys.stderr)
+    elif entry.get("valid"):
+        print(f"'{args.path}' is VALID", file=sys.stderr)
+    else:
+        print(f"'{args.path}' has ERRORS", file=sys.stderr)
 
 
 def cmd_new(api: LeekWarsAPI, args):
-    """Create new AI file."""
-    folder_id = args.folder_id
-
-    # Support folder path instead of just ID
-    if isinstance(folder_id, str) and not folder_id.isdigit():
-        # Resolve folder path to ID
-        data = api.get_farmer_ais()
-        folders = {0: {"name": "", "parent": None}}
-        for f in data.get("folders", []):
-            folders[f["id"]] = {"name": f["name"], "parent": f.get("folder", 0)}
-
-        def get_path(fid: int) -> str:
-            if fid == 0:
-                return ""
-            parts = []
-            current = fid
-            while current != 0 and current in folders:
-                parts.append(folders[current]["name"])
-                current = folders[current]["parent"] or 0
-            return "/".join(reversed(parts))
-
-        folder_path = folder_id.strip("/")
-        folder_id = None
-        for fid in folders:
-            if get_path(fid) == folder_path:
-                folder_id = fid
-                break
-
-        if folder_id is None:
-            raise Exception(f"Folder '{args.folder_id}' not found. Use 'aisync list --folders' to see available folders.")
+    path = args.path.strip("/")
+    if "/" in path:
+        folder, name = path.rsplit("/", 1)
     else:
-        folder_id = int(folder_id) if folder_id else 0
-
-    result = api.create_ai(args.name, folder_id, version=4)
-    print(f"Created AI '{result['name']}' with id:{result['id']}", file=sys.stderr)
-    print(result["id"])  # Output just the ID for scripting
+        folder, name = "", path
+    result = api.create_ai(name, folder=folder, version=args.version)
+    print(f"Created '{result.get('path', path)}'", file=sys.stderr)
+    print(result.get("path", path))
 
 
 def cmd_rename(api: LeekWarsAPI, args):
-    """Rename AI file."""
-    api.rename_ai(args.ai_id, args.name)
-    print(f"Renamed AI {args.ai_id} to '{args.name}'", file=sys.stderr)
+    api.rename_ai(args.path, args.new_name)
+    print(f"Renamed '{args.path}' -> '{args.new_name}'", file=sys.stderr)
 
 
-def cmd_move(api: LeekWarsAPI, args):
-    """Move AI file to a different folder."""
-    data = api.get_farmer_ais()
+def cmd_mv(api: LeekWarsAPI, args):
+    dest = args.dest.strip("/")
+    api.move_ai(args.path, dest)
+    print(f"Moved '{args.path}' -> '{dest or '(root)'}'", file=sys.stderr)
 
-    # Get AI name for feedback
-    ai_name = None
-    for ai in data.get("ais", []):
-        if ai["id"] == args.ai_id:
-            ai_name = ai["name"]
-            break
 
-    if not ai_name:
-        raise Exception(f"AI {args.ai_id} not found")
+def cmd_rm(api: LeekWarsAPI, args):
+    result = api.delete_ai(args.path)
+    trash = result.get("trash_name", args.path)
+    print(f"Deleted '{args.path}' (bin: '{trash}')", file=sys.stderr)
 
-    # Resolve folder - can be ID or path
-    folder_id = None
 
-    # Try as integer first
-    try:
-        folder_id = int(args.folder)
-        # Validate folder exists (0 is root, always valid)
-        if folder_id != 0:
-            folders = {f["id"]: f["name"] for f in data.get("folders", [])}
-            if folder_id not in folders:
-                raise Exception(f"Folder ID {folder_id} not found")
-    except ValueError:
-        # It's a path, resolve it
-        folder_path = args.folder.strip("/")
-
-        # Build path -> id mapping
-        folders = {0: {"name": "", "parent": None}}
-        for f in data.get("folders", []):
-            folders[f["id"]] = {"name": f["name"], "parent": f.get("folder", 0)}
-
-        def get_path(fid: int) -> str:
-            if fid == 0:
-                return ""
-            parts = []
-            current = fid
-            while current != 0 and current in folders:
-                parts.append(folders[current]["name"])
-                current = folders[current]["parent"] or 0
-            return "/".join(reversed(parts))
-
-        # Find folder by path
-        for fid in folders:
-            if get_path(fid) == folder_path:
-                folder_id = fid
-                break
-
-        if folder_id is None:
-            raise Exception(f"Folder '{args.folder}' not found")
-
-    api.move_ai(args.ai_id, folder_id)
-    folder_name = args.folder if not str(args.folder).isdigit() else f"id:{folder_id}"
-    print(f"Moved AI '{ai_name}' to [{folder_name}]", file=sys.stderr)
+def cmd_restore(api: LeekWarsAPI, args):
+    api.restore_ai(args.trash_name)
+    print(f"Restored '{args.trash_name}' from bin", file=sys.stderr)
 
 
 def cmd_mkdir(api: LeekWarsAPI, args):
-    """Create a folder."""
-    result = api.create_folder(args.name, args.parent_id)
-    print(f"Created folder '{result['name']}' with id:{result['id']}", file=sys.stderr)
-    print(result["id"])  # Output just the ID for scripting
+    api.create_folder(args.path.strip("/"))
+    print(f"Created folder '{args.path}'", file=sys.stderr)
 
 
-def cmd_delete(api: LeekWarsAPI, args):
-    """Delete an AI file."""
-    # Get the name first
-    data = api.get_farmer_ais()
-    name = None
-    for ai in data.get("ais", []):
-        if ai["id"] == args.ai_id:
-            name = ai["name"]
-            break
-
-    if not name:
-        raise Exception(f"AI {args.ai_id} not found")
-
-    api.delete_ai(args.ai_id)
-    print(f"Deleted AI '{name}' (id:{args.ai_id})", file=sys.stderr)
+def cmd_rmdir(api: LeekWarsAPI, args):
+    api.delete_folder(args.path.strip("/"))
+    print(f"Deleted folder '{args.path}'", file=sys.stderr)
 
 
 def cmd_download(api: LeekWarsAPI, args):
-    """Download all AI files to a directory."""
-    from pathlib import Path
-    import time as time_module
-
     output_dir = Path(args.directory)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    data = api.get_farmer_ais()
-
-    # Build folder map - handle nested folders properly
-    folders = {0: ""}
-    folder_list = data.get("folders", [])
-
-    # Sort folders by parent to ensure parents are processed first
-    for folder in sorted(folder_list, key=lambda f: f.get("folder", 0)):
-        parent = folder.get("folder", 0)
-        parent_path = folders.get(parent, "")
-        folders[folder["id"]] = f"{parent_path}/{folder['name']}" if parent_path else folder["name"]
-
-    # Download each AI with rate limiting
+    files = api.list_ais()
     count = 0
     errors = []
-    for ai in data.get("ais", []):
-        ai_id = ai["id"]
-        name = ai["name"]
-        folder_id = ai.get("folder", 0)
-        folder_path = folders.get(folder_id, "")
-
+    for entry in files:
+        path = entry["path"]
+        dest = output_dir / path
         try:
-            # Get code
-            ai_data = api.get_ai(ai_id)
-            code = ai_data.get("ai", {}).get("code", "")
-
-            # Build output path
-            if folder_path:
-                file_path = output_dir / folder_path / f"{name}.ls"
-            else:
-                file_path = output_dir / f"{name}.ls"
-
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(code)
-
-            print(f"  {file_path}", file=sys.stderr)
+            code = api.read_ai(path)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(code, encoding="utf-8")
+            print(f"  {dest}", file=sys.stderr)
             count += 1
-
-            # Small delay to avoid rate limiting
-            time_module.sleep(0.1)
-
+            time.sleep(0.1)
         except Exception as e:
-            errors.append(f"{name}: {e}")
-            print(f"  ERROR: {name} - {e}", file=sys.stderr)
+            errors.append(f"{path}: {e}")
+            print(f"  ERROR: {path} — {e}", file=sys.stderr)
 
-    print(f"Downloaded {count} files to {output_dir}", file=sys.stderr)
+    print(f"Downloaded {count}/{len(files)} files to {output_dir}", file=sys.stderr)
     if errors:
         print(f"Errors: {len(errors)}", file=sys.stderr)
+        sys.exit(1)
 
+
+def _collect_local(root: Path) -> dict[str, int]:
+    """Collect LeekScript files under root. Returns {relative_path: size}."""
+    SKIP_DIRS = {".git", "tampermonkey", "docs", "__pycache__"}
+    SKIP_EXACT = {"LICENSE", "readme.md", "TODO.md", ".gitignore"}
+    SKIP_EXT = {".md", ".js", ".json", ".txt", ".py", ".yml", ".yaml"}
+
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for name in filenames:
+            if name in SKIP_EXACT:
+                continue
+            if any(name.endswith(ext) for ext in SKIP_EXT):
+                continue
+            full = Path(dirpath) / name
+            rel = full.relative_to(root).as_posix()
+            out[rel] = full.stat().st_size
+    return out
+
+
+def cmd_push(api: LeekWarsAPI, args):
+    """Upload every local file under <directory> to its matching remote path.
+
+    Creates missing folders & files. Optionally restricts to files that differ
+    from the remote (--only-changed, based on byte length — remote char count
+    can differ slightly due to UTF-8 multi-byte but catches most real changes).
+    """
+    root = Path(args.directory)
+    local = _collect_local(root)
+    if not local:
+        print("No local files found", file=sys.stderr)
+        return
+
+    remote = {f["path"]: f for f in api.list_ais()}
+    remote_folders = set(api.list_ai_folders())
+
+    if args.only_changed:
+        targets = {
+            p: sz for p, sz in local.items()
+            if p not in remote or remote[p].get("total_chars", -1) != sz
+        }
+    else:
+        targets = dict(local)
+
+    if not targets:
+        print("Nothing to upload (everything matches).", file=sys.stderr)
+        return
+
+    # Ensure parent folders exist (deepest-last)
+    needed_folders = set()
+    for p in targets:
+        parts = p.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            needed_folders.add("/".join(parts[:i]))
+    for folder in sorted(needed_folders, key=lambda x: x.count("/")):
+        if folder not in remote_folders:
+            try:
+                api.create_folder(folder)
+                remote_folders.add(folder)
+                print(f"  mkdir  {folder}", file=sys.stderr)
+                time.sleep(0.2)
+            except Exception as e:
+                print(f"  WARN: mkdir {folder} failed: {e}", file=sys.stderr)
+
+    # Upload files
+    uploaded = 0
+    for path in sorted(targets):
+        code = (root / path).read_text(encoding="utf-8")
+        try:
+            if path not in remote:
+                folder = path.rsplit("/", 1)[0] if "/" in path else ""
+                name = path.rsplit("/", 1)[-1]
+                api.create_ai(name, folder=folder, version=4)
+                time.sleep(0.2)
+            api.write_ai(path, code)
+            print(f"  push   {path} ({len(code)} chars)", file=sys.stderr)
+            uploaded += 1
+            time.sleep(0.15)
+        except Exception as e:
+            print(f"  ERROR  {path}: {e}", file=sys.stderr)
+
+    print(f"Uploaded {uploaded}/{len(targets)} files.", file=sys.stderr)
+
+
+def cmd_sync(api: LeekWarsAPI, args):
+    local = _collect_local(Path(args.directory))
+    remote = {f["path"]: f for f in api.list_ais()}
+
+    only_local = sorted(set(local) - set(remote))
+    only_remote = sorted(set(remote) - set(local))
+    both = sorted(set(local) & set(remote))
+
+    acct = api.farmer.get("login", "?")
+    print(f"=== sync status: local={args.directory}  remote={acct} ===")
+    print(f"  local files:  {len(local)}")
+    print(f"  remote files: {len(remote)}")
+    print(f"  overlap:      {len(both)}")
+    print(f"  only local:   {len(only_local)}")
+    print(f"  only remote:  {len(only_remote)}")
+
+    if only_local:
+        print("\n-- only local (would upload) --")
+        for p in only_local:
+            print(f"  + {p} ({local[p]} B)")
+    if only_remote:
+        print("\n-- only remote (would pull) --")
+        for p in only_remote:
+            print(f"  - {p} ({remote[p].get('total_chars', '?')} chars)")
+
+    if args.json:
+        print(json.dumps({
+            "account": acct,
+            "only_local": only_local,
+            "only_remote": only_remote,
+            "overlap": both,
+        }, indent=2))
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
 
 def main():
-    parser = argparse.ArgumentParser(description="Manage AI code files on LeekWars")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    p = argparse.ArgumentParser(description="Manage AI files on LeekWars (path-based)")
+    p.add_argument("--account", help="Override LEEKWARS_LOGIN (password from .env)")
+    sub = p.add_subparsers(dest="command", required=False)
 
-    # list
-    p_list = subparsers.add_parser("list", help="List all AI files")
-    p_list.add_argument("--json", action="store_true", help="Output as JSON")
-    p_list.add_argument("--folders", action="store_true", help="Show folders with IDs only")
+    sp = sub.add_parser("list", help="List AI files")
+    sp.add_argument("--json", action="store_true")
+    sp.add_argument("--folders", action="store_true")
+    sp.add_argument("--bin", action="store_true")
 
-    # get
-    p_get = subparsers.add_parser("get", help="Download AI code")
-    p_get.add_argument("ai_id", type=int, help="AI ID to download")
-    p_get.add_argument("-o", "--output", help="Output file (default: stdout)")
+    sp = sub.add_parser("get", help="Download AI code")
+    sp.add_argument("path")
+    sp.add_argument("-o", "--output")
 
-    # put
-    p_put = subparsers.add_parser("put", help="Upload code to AI")
-    p_put.add_argument("ai_id", type=int, help="AI ID to update")
-    p_put.add_argument("file", help="File to upload (use - for stdin)")
+    sp = sub.add_parser("put", help="Upload AI code")
+    sp.add_argument("path")
+    sp.add_argument("file")
 
-    # new
-    p_new = subparsers.add_parser("new", help="Create new AI file")
-    p_new.add_argument("name", help="Name for new AI")
-    p_new.add_argument("folder_id", nargs="?", default="0",
-                       help="Folder ID or path (e.g., 'Model/Tactical' or '31579')")
+    sp = sub.add_parser("new", help="Create new AI file")
+    sp.add_argument("path", help="Full path (folder/name)")
+    sp.add_argument("--version", type=int, default=4)
 
-    # rename
-    p_rename = subparsers.add_parser("rename", help="Rename AI file")
-    p_rename.add_argument("ai_id", type=int, help="AI ID to rename")
-    p_rename.add_argument("name", help="New name")
+    sp = sub.add_parser("rename", help="Rename AI file")
+    sp.add_argument("path")
+    sp.add_argument("new_name")
 
-    # move
-    p_move = subparsers.add_parser("move", help="Move AI to folder")
-    p_move.add_argument("ai_id", type=int, help="AI ID to move")
-    p_move.add_argument("folder", help="Target folder (path like 'Controlers' or ID)")
+    sp = sub.add_parser("mv", help="Move AI file")
+    sp.add_argument("path")
+    sp.add_argument("dest", help="Destination folder path ('' for root)")
 
-    # mkdir
-    p_mkdir = subparsers.add_parser("mkdir", help="Create folder")
-    p_mkdir.add_argument("name", help="Folder name")
-    p_mkdir.add_argument("parent_id", type=int, nargs="?", default=0,
-                         help="Parent folder ID (default: root)")
+    sp = sub.add_parser("rm", help="Delete AI file (moves to bin)")
+    sp.add_argument("path")
 
-    # delete
-    p_delete = subparsers.add_parser("delete", help="Delete AI file")
-    p_delete.add_argument("ai_id", type=int, help="AI ID to delete")
+    sp = sub.add_parser("restore", help="Restore AI file from bin")
+    sp.add_argument("trash_name")
 
-    # download
-    p_download = subparsers.add_parser("download", help="Download all AI files")
-    p_download.add_argument("directory", help="Output directory")
+    sp = sub.add_parser("mkdir", help="Create folder")
+    sp.add_argument("path")
 
-    args = parser.parse_args()
+    sp = sub.add_parser("rmdir", help="Delete folder")
+    sp.add_argument("path")
+
+    sp = sub.add_parser("download", help="Download all files")
+    sp.add_argument("directory")
+
+    sp = sub.add_parser("sync", help="Compare local directory vs remote tree")
+    sp.add_argument("directory")
+    sp.add_argument("--json", action="store_true")
+
+    sp = sub.add_parser("push", help="Upload local directory to remote (bulk)")
+    sp.add_argument("directory")
+    sp.add_argument("--only-changed", action="store_true",
+                    help="Skip files whose remote char-count matches local byte-count")
+
+    args = p.parse_args()
 
     if not args.command:
-        parser.print_help()
+        p.print_help()
         sys.exit(1)
 
     try:
         login, password = load_credentials()
+        if args.account:
+            login = args.account
         api = LeekWarsAPI()
         api.login(login, password)
 
-        if args.command == "list":
-            cmd_list(api, args)
-        elif args.command == "get":
-            cmd_get(api, args)
-        elif args.command == "put":
-            cmd_put(api, args)
-        elif args.command == "new":
-            cmd_new(api, args)
-        elif args.command == "rename":
-            cmd_rename(api, args)
-        elif args.command == "move":
-            cmd_move(api, args)
-        elif args.command == "mkdir":
-            cmd_mkdir(api, args)
-        elif args.command == "delete":
-            cmd_delete(api, args)
-        elif args.command == "download":
-            cmd_download(api, args)
+        {
+            "list":     cmd_list,
+            "get":      cmd_get,
+            "put":      cmd_put,
+            "new":      cmd_new,
+            "rename":   cmd_rename,
+            "mv":       cmd_mv,
+            "rm":       cmd_rm,
+            "restore":  cmd_restore,
+            "mkdir":    cmd_mkdir,
+            "rmdir":    cmd_rmdir,
+            "download": cmd_download,
+            "sync":     cmd_sync,
+            "push":     cmd_push,
+        }[args.command](api, args)
 
     except TagadAIError as e:
         print(f"ERROR: {e}", file=sys.stderr)

@@ -849,7 +849,7 @@ AI.mode = AI.MODE_UNIFIED_MCTS
 
 Après modification, uploader le fichier `main` avec :
 ```bash
-python -m src.tools.aisync put <main_id> tagadalive/main
+python -m src.tools.aisync put main tagadalive/main
 ```
 
 ---
