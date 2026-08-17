@@ -11,6 +11,8 @@ Usage:
     python -m src.tools.boss --with tagadanar          # Multi-account (same password)
     python -m src.tools.boss --with tagadanar,tagadalone  # Multiple extra accounts
     python -m src.tools.boss --join LaLongueTerre --as tagadanar  # Auto-join player's lobby
+    python -m src.tools.boss --join pakalatak --boss 3 --as tagadagain:2 --with tagadanar:2
+        # Auto-join with several accounts; login:N = that account's first N leeks
 """
 
 import argparse
@@ -343,6 +345,14 @@ class BossWatcher:
         return fight_id
 
 
+def parse_account_spec(spec: str) -> tuple[str, int | None]:
+    """Split an account spec 'login' or 'login:N' into (login, N or None)."""
+    if ":" in spec:
+        account, max_str = spec.rsplit(":", 1)
+        return account, int(max_str)
+    return spec, None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Launch a boss fight")
     parser.add_argument("--boss", type=int, default=1, choices=[1, 2, 3],
@@ -352,18 +362,21 @@ def main():
     parser.add_argument("--wait", action="store_true",
                         help="Wait for fight result")
     parser.add_argument("--with", dest="with_accounts", type=str, default=None,
-                        help="Extra account logins (comma-sep, same pw). Use account:N to limit leeks")
+                        help="Extra account logins (comma-sep, same pw). Use login:N for first N leeks")
     parser.add_argument("--join", type=str, default=None,
-                        help="Watch for this player's lobby and auto-join")
+                        help="Watch for this player's lobby and auto-join (rejoins forever)")
     parser.add_argument("--as", dest="as_account", type=str, default=None,
-                        help="Account to join with (used with --join, same password)")
+                        help="Joining account in --join mode: login or login:N for first N leeks")
     args = parser.parse_args()
+
+    # Live progress even when stdout is piped/redirected
+    sys.stdout.reconfigure(line_buffering=True)
 
     # Login main account (or --as account for --join mode)
     login, password = load_credentials()
 
     if args.join:
-        join_login = args.as_account or login
+        join_login, join_max = parse_account_spec(args.as_account or login)
         api = LeekWarsAPI()
         farmer = api.login(join_login, password)
         token = api.token
@@ -374,16 +387,41 @@ def main():
             leek_ids = [int(x) for x in args.leeks.split(",")]
         else:
             leek_ids = [int(lid) for lid in all_leeks.keys()]
+            if join_max is not None:
+                leek_ids = leek_ids[:join_max]
         leek_names = [all_leeks.get(str(lid), {}).get("name", f"#{lid}") for lid in leek_ids]
 
         boss_name = BOSS_NAMES.get(args.boss, f"Boss {args.boss}")
         print(f"Boss: {boss_name}")
         print(f"Leeks ({len(leek_ids)}): {', '.join(leek_names)}")
+
+        # Extra accounts join too: one watcher per account (login:N = first N leeks)
+        watchers = [BossWatcher(token, leek_ids, args.join, args.boss)]
+        if args.with_accounts:
+            for entry in args.with_accounts.split(","):
+                extra_login, max_leeks = parse_account_spec(entry.strip())
+                extra_api = LeekWarsAPI()
+                extra_farmer = extra_api.login(extra_login, password)
+                extra_leeks = extra_farmer.get("leeks", {})
+                extra_ids = [int(lid) for lid in extra_leeks.keys()]
+                extra_names = [l["name"] for l in extra_leeks.values()]
+                if max_leeks is not None and max_leeks < len(extra_ids):
+                    extra_ids = extra_ids[:max_leeks]
+                    extra_names = extra_names[:max_leeks]
+                print(f"  + {extra_login}: {', '.join(extra_names)}")
+                watchers.append(BossWatcher(extra_api.token, extra_ids, args.join, args.boss))
+
         print(f"Watching for: {args.join}")
         print()
 
-        watcher = BossWatcher(token, leek_ids, args.join, args.boss)
-        watcher.run()
+        if len(watchers) == 1:
+            watchers[0].run()
+        else:
+            threads = [threading.Thread(target=w.run, daemon=True) for w in watchers]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
         return
 
     api = LeekWarsAPI()
@@ -405,18 +443,11 @@ def main():
     print(f"Boss: {boss_name}")
     print(f"Leeks ({len(leek_ids)}): {', '.join(leek_names)}")
 
-    # Login extra accounts
-    # Syntax: "account" or "account:N" to limit to N leeks
+    # Login extra accounts ("login" or "login:N" for first N leeks)
     extra_accounts = []
     if args.with_accounts:
         for entry in args.with_accounts.split(","):
-            entry = entry.strip()
-            if ":" in entry:
-                extra_login, max_str = entry.rsplit(":", 1)
-                max_leeks = int(max_str)
-            else:
-                extra_login = entry
-                max_leeks = None
+            extra_login, max_leeks = parse_account_spec(entry.strip())
             extra_api = LeekWarsAPI()
             extra_farmer = extra_api.login(extra_login, password)
             extra_leeks = extra_farmer.get("leeks", {})
