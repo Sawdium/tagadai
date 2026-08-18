@@ -1,0 +1,400 @@
+/*
+ * Our equipment, read once per fight straight from the engine.
+ *
+ * Nothing here is hardcoded: ids come from getWeapons()/getChips() and every
+ * property from the natives, so re-equipping the leek changes the AI's
+ * behaviour with no code change. Effects are kept as raw rows and interpreted
+ * at simulation time, which is what lets one code path handle damage, heals,
+ * shields and debuffs alike.
+ */
+class Spec {
+	integer id
+	boolean isGun               // weapon (true) or chip (false)
+	string label
+
+	integer cost
+	integer minRange
+	integer maxRange
+	integer launch              // launch-type bitmask
+	integer zone                // AREA_* constant
+	boolean needSight
+	integer maxUses             // -1 = unlimited
+	integer cool                // turns before it can be used again, 0 for weapons
+
+	// [effectId, min, max, turns, targets, modifiers] rows, exactly as the
+	// engine reports them.
+	Array<Array<integer|real>> fx = []
+
+	// Cheap classification, used only to prune: an item with no effect that
+	// can ever land on an enemy is never worth aiming at one.
+	boolean canHarm = false
+	boolean canMend = false
+
+	constructor(integer id, boolean isGun) {
+		this.id = id
+		this.isGun = isGun
+
+		if (isGun) {
+			this.label = getWeaponName(id) ?? ('weapon' + id)
+			this.cost = getWeaponCost(id) ?? 0
+			this.minRange = getWeaponMinRange(id) ?? 0
+			this.maxRange = getWeaponMaxRange(id) ?? 0
+			this.launch = getWeaponLaunchType(id) ?? LAUNCH_TYPE_CIRCLE
+			this.zone = getWeaponArea(id) ?? AREA_POINT
+			this.needSight = weaponNeedLos(id) ?? true
+			this.maxUses = getWeaponMaxUses(id) ?? -1
+			this.cool = 0
+			this.fx = getWeaponEffects(id) ?? []
+		} else {
+			this.label = getChipName(id) ?? ('chip' + id)
+			this.cost = getChipCost(id) ?? 0
+			this.minRange = getChipMinRange(id) ?? 0
+			this.maxRange = getChipMaxRange(id) ?? 0
+			this.launch = getChipLaunchType(id) ?? LAUNCH_TYPE_CIRCLE
+			this.zone = getChipArea(id) ?? AREA_POINT
+			this.needSight = chipNeedLos(id) ?? true
+			this.maxUses = getChipMaxUses(id) ?? -1
+			this.cool = getChipCooldown(id) ?? 0
+			this.fx = getChipEffects(id) ?? []
+		}
+
+		for (var row in this.fx) {
+			integer type = row[0] as integer
+			integer targets = row[4] as integer
+			boolean onFoes = (targets & EFFECT_TARGET_ENEMIES) != 0
+			boolean onUs = (targets & (EFFECT_TARGET_CASTER | EFFECT_TARGET_ALLIES)) != 0
+
+			if (Kit.hurts(type)) {
+				if (onFoes) this.canHarm = true
+			} else if (Sim.drains(type)) {
+				// A shackle or a vulnerability is an attack, just not a damaging one.
+				if (onFoes) this.canHarm = true
+			} else if (Sim.slotOf(type) != Sim.S_NONE) {
+				// Anything else that moves a stat in our favour is support.
+				if (onUs) this.canMend = true
+			}
+		}
+	}
+
+	// Uses left this turn. getItemUses is a per-turn counter the engine keeps
+	// for us, so there is no local bookkeeping to get out of sync.
+	integer usesLeft() {
+		if (this.maxUses < 0) return 99
+		return this.maxUses - (getItemUses(this.id) ?? 0)
+	}
+
+	boolean ready() {
+		if (this.usesLeft() <= 0) return false
+		if (this.isGun) return true
+		return (getCooldown(this.id) ?? 0) == 0
+	}
+
+	// The engine charges 1 TP to swap weapons, and charges it even when you
+	// "swap" to the weapon already in hand — so only ever call setWeapon when
+	// it actually changes something.
+	integer realCost(integer held) {
+		if (this.isGun && held != this.id) return this.cost + 1
+		return this.cost
+	}
+
+	/*
+	 * Cells this item hits when aimed at `at` from `from`.
+	 * Point areas are the overwhelmingly common case and need no native call.
+	 */
+	Array<integer> splash(integer from, integer at) {
+		if (this.zone == AREA_POINT) return [at]
+		Array<integer>? cells = this.isGun
+			? getWeaponEffectiveArea(this.id, at, from)
+			: getChipEffectiveArea(this.id, at, from)
+		if (cells == null || count(cells) == 0) return [at]
+		return cells
+	}
+}
+
+/*
+ * An entity's per-TP output, bucketed by the stat that multiplies it. Only the
+ * best item in each bucket counts: a turn is spent on the strongest thing that
+ * fits, not on the average of everything owned.
+ */
+class Profile {
+	real dmgStr = 0.0        // scales with strength
+	real dmgMag = 0.0        // poison, scales with magic
+	real dmgSci = 0.0        // nova / aftereffect, scales with science
+	real dmgFlat = 0.0       // scales with nothing
+	real heal = 0.0          // scales with wisdom
+	real shield = 0.0        // absolute shield per TP, scales with resistance
+
+	void absorb(Array<Array<integer|real>>? effects, integer cost) {
+		if (effects == null || cost <= 0) return;
+		for (var row in effects) {
+			integer type = row[0] as integer
+			real rate = ((row[1] as real) + (row[2] as real)) / 2.0 / cost
+			if (rate <= 0) continue
+			integer turns = row[3] as integer
+
+			if (type == EFFECT_DAMAGE || type == EFFECT_LIFE_DAMAGE) {
+				if (rate > this.dmgStr) this.dmgStr = rate
+			} else if (type == EFFECT_POISON) {
+				real spread = rate * max(1, turns)
+				if (spread > this.dmgMag) this.dmgMag = spread
+			} else if (type == EFFECT_NOVA_DAMAGE || type == EFFECT_AFTEREFFECT) {
+				if (rate > this.dmgSci) this.dmgSci = rate
+			} else if (type == EFFECT_HEAL || type == EFFECT_RAW_HEAL) {
+				if (rate > this.heal) this.heal = rate
+			} else if (type == EFFECT_ABSOLUTE_SHIELD || type == EFFECT_RAW_ABSOLUTE_SHIELD) {
+				if (rate > this.shield) this.shield = rate
+			}
+		}
+	}
+}
+
+/*
+ * One damaging item, priced for one entity.
+ *
+ * Cost and range are properties of the item; the damage is not — it is what
+ * THIS entity's strength, magic, science and power turn that item into. That
+ * is the whole point: it makes our firepower and an enemy's threat two
+ * readings of the same instrument, in hit points, comparable directly.
+ *
+ * The range fields are `lo` and `hi`, never `min` and `max`: a field named
+ * after a native shadows it, silently, for the whole class.
+ */
+class Shell {
+	integer id
+	boolean isGun
+	integer cost
+	integer lo
+	integer hi
+	integer launch
+	boolean sight
+	integer uses               // -1 = unlimited within a turn
+	real dmg                   // expected damage of one use
+	real rate                  // dmg per TP; the greedy fill spends in this order
+}
+
+class Kit {
+	static Array<Spec> all = []
+	static boolean _ready = false
+
+	static void init() {
+		if (Kit._ready) return;
+		Kit._ready = true
+
+		Array<integer>? weapons = getWeapons()
+		if (weapons != null) {
+			for (integer w in weapons) push(Kit.all, new Spec(w, true))
+		}
+		Array<integer>? chips = getChips()
+		if (chips != null) {
+			for (integer c in chips) push(Kit.all, new Spec(c, false))
+		}
+	}
+
+	static boolean hurts(integer type) {
+		return type == EFFECT_DAMAGE
+			|| type == EFFECT_POISON
+			|| type == EFFECT_NOVA_DAMAGE
+			|| type == EFFECT_AFTEREFFECT
+			|| type == EFFECT_LIFE_DAMAGE
+	}
+
+	/*
+	 * What an entity's kit is worth per point of TP, split by the stat that
+	 * scales it. This is what lets a buff be priced without naming it: change
+	 * a stat, re-run the profile, and the difference is damage per turn.
+	 *
+	 * Loadouts are fixed for the fight, so each entity is profiled once.
+	 */
+	static Map<integer, Profile> _profile = [:]
+
+	static Profile profileOf(integer id) {
+		Profile? cached = Kit._profile[id]
+		if (cached != null) return cached
+
+		Profile p = new Profile()
+		Array<integer>? weapons = getWeapons(id)
+		if (weapons != null) {
+			for (integer w in weapons) {
+				p.absorb(getWeaponEffects(w), getWeaponCost(w) ?? 0)
+			}
+		}
+		Array<integer>? chips = getChips(id)
+		if (chips != null) {
+			for (integer c in chips) {
+				p.absorb(getChipEffects(c), getChipCost(c) ?? 0)
+			}
+		}
+		Kit._profile[id] = p
+		return p
+	}
+
+	// Furthest an entity can deal damage from, used to size its threat
+	// envelope. Loadouts never change mid-fight, so this is cached.
+	static Map<integer, integer> _reach = [:]
+
+	static integer reachOf(integer id) {
+		integer? cached = Kit._reach[id]
+		if (cached != null) return cached
+
+		integer best = 0
+		Array<integer>? weapons = getWeapons(id)
+		if (weapons != null) {
+			for (integer w in weapons) {
+				if (!Kit._harmful(getWeaponEffects(w))) continue
+				integer range = getWeaponMaxRange(w) ?? 0
+				if (range > best) best = range
+			}
+		}
+		Array<integer>? chips = getChips(id)
+		if (chips != null) {
+			for (integer c in chips) {
+				if (!Kit._harmful(getChipEffects(c))) continue
+				integer range = getChipMaxRange(c) ?? 0
+				if (range > best) best = range
+			}
+		}
+
+		Kit._reach[id] = best
+		return best
+	}
+
+	static boolean _harmful(Array<Array<integer|real>>? effects) {
+		if (effects == null) return false
+		for (var row in effects) {
+			if (Kit.hurts(row[0] as integer)) return true
+		}
+		return false
+	}
+
+	/*
+	 * Every damaging item an entity carries, best value per TP first, with the
+	 * damage already scaled by that entity's own stats. Loadouts and stats that
+	 * matter here are fixed for the fight, so this is built once per entity.
+	 */
+	static Map<integer, Array<Shell>> _arsenal = [:]
+
+	static Array<Shell> arsenalOf(integer id) {
+		Array<Shell>? cached = Kit._arsenal[id]
+		if (cached != null) return cached
+
+		real power = 1 + (getPower(id) ?? 0) / 100.0
+		real str = (1 + max(0, getStrength(id) ?? 0) / 100.0) * power
+		real mag = (1 + max(0, getMagic(id) ?? 0) / 100.0) * power
+		real sci = (1 + max(0, getScience(id) ?? 0) / 100.0) * power
+
+		Array<Shell> out = []
+		Array<integer>? weapons = getWeapons(id)
+		if (weapons != null) {
+			for (integer w in weapons) Kit._arm(out, w, true, str, mag, sci)
+		}
+		Array<integer>? chips = getChips(id)
+		if (chips != null) {
+			for (integer c in chips) Kit._arm(out, c, false, str, mag, sci)
+		}
+		Kit._arsenal[id] = out
+		return out
+	}
+
+	static void _arm(Array<Shell> out, integer item, boolean isGun, real str, real mag, real sci) {
+		Array<Array<integer|real>>? fx = isGun ? getWeaponEffects(item) : getChipEffects(item)
+		if (fx == null) return;
+
+		real dmg = 0.0
+		for (var row in fx) {
+			if (((row[4] as integer) & EFFECT_TARGET_ENEMIES) == 0) continue
+			integer type = row[0] as integer
+			real avg = ((row[1] as real) + (row[2] as real)) / 2.0
+			if (type == EFFECT_DAMAGE || type == EFFECT_LIFE_DAMAGE) {
+				dmg += avg * str
+			} else if (type == EFFECT_POISON) {
+				dmg += avg * mag * Sim.durationWorth(max(1, row[3] as integer))
+			} else if (type == EFFECT_NOVA_DAMAGE || type == EFFECT_AFTEREFFECT) {
+				dmg += avg * sci
+			}
+		}
+		if (dmg <= 0) return;
+
+		integer cost = isGun ? (getWeaponCost(item) ?? 0) : (getChipCost(item) ?? 0)
+		if (cost <= 0) return;
+
+		Shell s = new Shell()
+		s.id = item
+		s.isGun = isGun
+		s.cost = cost
+		s.dmg = dmg
+		s.rate = dmg / cost
+		if (isGun) {
+			s.lo = getWeaponMinRange(item) ?? 0
+			s.hi = getWeaponMaxRange(item) ?? 0
+			s.launch = getWeaponLaunchType(item) ?? LAUNCH_TYPE_CIRCLE
+			s.sight = weaponNeedLos(item) ?? true
+			s.uses = getWeaponMaxUses(item) ?? -1
+		} else {
+			s.lo = getChipMinRange(item) ?? 0
+			s.hi = getChipMaxRange(item) ?? 0
+			s.launch = getChipLaunchType(item) ?? LAUNCH_TYPE_CIRCLE
+			s.sight = chipNeedLos(item) ?? true
+			s.uses = getChipMaxUses(item) ?? -1
+			// A chip that goes on cooldown at all can only ever be fired once in
+			// a turn, whatever its use limit claims. Without this the fill
+			// happily spends ten TP on two casts of a one-shot chip.
+			if ((getChipCooldown(item) ?? 0) > 0 && (s.uses < 0 || s.uses > 1)) s.uses = 1
+		}
+
+		// Insertion sort, best rate first. The fill below depends on the order
+		// and no entity carries enough items for this to cost anything.
+		integer at = count(out)
+		push(out, s)
+		while (at > 0 && out[at - 1].rate < s.rate) {
+			out[at] = out[at - 1]
+			at--
+		}
+		out[at] = s
+	}
+
+	/*
+	 * The most damage an entity can put into a single target standing `d` cells
+	 * away, spending its whole TP budget on whatever reaches.
+	 *
+	 * Line of sight and launch geometry are left out on purpose. We do not know
+	 * which cell the enemy will choose to shoot from, and when sizing what can
+	 * be done TO us, assuming the worst is the safe direction to be wrong in.
+	 */
+	static Map<integer, real> _burst = [:]
+	static integer _burstTurn = -1
+
+	static real burstAt(integer id, integer d) {
+		// Cached per turn rather than per fight: cooldowns tick, so what an
+		// entity can bring to bear is not a constant of the fight the way its
+		// kit is.
+		integer turn = getTurn() ?? 0
+		if (Kit._burstTurn != turn) {
+			Kit._burst = [:]
+			Kit._burstTurn = turn
+		}
+
+		if (d < 0) d = 0
+		if (d > 31) d = 31
+		integer key = id * 32 + d
+		real? cached = Kit._burst[key]
+		if (cached != null) return cached
+
+		integer tp = getTotalTP(id) ?? 0
+		real total = 0.0
+		for (Shell s in Kit.arsenalOf(id)) {
+			if (tp < s.cost) continue
+			if (d < s.lo || d > s.hi) continue
+			// Do not credit an entity with a chip it cannot cast. getItemUses
+			// is self-only, so per-turn use limits stay unmodelled for enemies;
+			// cooldowns are the half of it we can actually see.
+			if (!s.isGun && (getCooldown(s.id, id) ?? 0) > 0) continue
+			integer shots = floor(tp / s.cost)
+			if (s.uses >= 0 && shots > s.uses) shots = s.uses
+			if (shots <= 0) continue
+			total += shots * s.dmg
+			tp -= shots * s.cost
+		}
+		Kit._burst[key] = total
+		return total
+	}
+}

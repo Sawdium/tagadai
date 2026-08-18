@@ -1,0 +1,357 @@
+/*
+ * Steps 2 and 3 of the plan: simulate an item's effects, then price the
+ * resulting board.
+ *
+ * Nothing here knows the name of a single item. An effect is translated into a
+ * change to one of thirteen stats, and a stat is priced by asking what the
+ * entity's own kit does with it — so a strength buff is worth exactly the
+ * extra damage that entity's best weapon will deal over the next few turns,
+ * and re-equipping the leek re-prices everything with no code change.
+ *
+ * Two currencies, both in hit points:
+ *
+ *   defence   life, scaled by relative shield, plus absolute shield over the
+ *             hits it will absorb, plus the healing and shielding the entity
+ *             can still apply to itself
+ *   offence   the damage an entity will deal over HORIZON turns, which is
+ *             subtracted from the OTHER side's pool — a leek that hits harder
+ *             does not become harder to kill, it makes its target's life
+ *             worth less
+ *
+ * An action's score is the change it makes to ourPool / theirPool. A kill
+ * drives the denominator to the floor, so "finish them" needs no bonus
+ * constant; it is just what the ratio does.
+ */
+class Delta {
+	// entity id -> stat id -> change
+	Map<integer, Map<integer, real>> by = [:]
+
+	real get(integer id, integer stat) {
+		Map<integer, real>? row = this.by[id]
+		if (row == null) return 0.0
+		return row[stat] ?? 0.0
+	}
+
+	void add(integer id, integer stat, real v) {
+		Map<integer, real>? row = this.by[id]
+		if (row == null) {
+			Map<integer, real> fresh = [:]
+			fresh[stat] = v
+			this.by[id] = fresh
+			return;
+		}
+		row[stat] = (row[stat] ?? 0.0) + v
+	}
+}
+
+class Sim {
+	// Stat slots. Local ids, not the engine's — we only ever compare them to
+	// each other.
+	static integer S_LIFE = 0
+	static integer S_MAXLIFE = 1
+	static integer S_ABS = 2
+	static integer S_REL = 3
+	static integer S_STR = 4
+	static integer S_MAG = 5
+	static integer S_SCI = 6
+	static integer S_AGI = 7
+	static integer S_WIS = 8
+	static integer S_RES = 9
+	static integer S_TP = 10
+	static integer S_MP = 11
+	static integer S_POWER = 12
+	static integer S_NONE = -1
+
+	// How many more hits an absolute shield is expected to blunt, and how many
+	// turns a buff or a shackle is worth planning around.
+	static real HITS = 2.0
+	static real HORIZON = 2.5
+
+	// Damage that only lands on later turns is worth less than damage now.
+	static real LATER = 0.75
+
+	// A point of MP is worth this fraction of a point of TP.
+	static real MP_WORTH = 0.25
+
+	// What an entity's damage output counts for while it has nothing in reach.
+	// Not zero: it will close eventually, and a buff is not worthless, just
+	// premature.
+	static real IDLE = 0.15
+
+	static Delta EMPTY = new Delta()
+	static real _base = 0.0
+
+	static void rebase() {
+		Sim._base = Sim.ratio(Sim.EMPTY)
+	}
+
+	/* ---------------------------------------------------------------- pricing */
+
+	// What this entity's kit converts a turn of TP into, given stat overrides.
+	static real output(Ent e, Delta d) {
+		real tp = e.tp + d.get(e.id, Sim.S_TP) + Sim.MP_WORTH * d.get(e.id, Sim.S_MP)
+		if (tp <= 0) return 0.0
+
+		Profile p = Kit.profileOf(e.id)
+		real raw = p.dmgStr * (1 + max(0.0, e.str + d.get(e.id, Sim.S_STR)) / 100.0)
+			+ p.dmgMag * (1 + max(0.0, e.mag + d.get(e.id, Sim.S_MAG)) / 100.0)
+			+ p.dmgSci * (1 + max(0.0, e.sci + d.get(e.id, Sim.S_SCI)) / 100.0)
+			+ p.dmgFlat
+		real power = 1 + (e.power + d.get(e.id, Sim.S_POWER)) / 100.0
+		// Criticals roll on agility/1000 and multiply by 1.3.
+		real crit = 1 + 0.3 * (e.agi + d.get(e.id, Sim.S_AGI)) / 1000.0
+		return tp * raw * power * crit * e.engagement
+	}
+
+	// What this entity can still do for its own survival in a turn.
+	static real support(Ent e, Delta d) {
+		Profile p = Kit.profileOf(e.id)
+		real tp = e.tp + d.get(e.id, Sim.S_TP)
+		if (tp <= 0) return 0.0
+		return tp * (p.heal * (1 + (e.wis + d.get(e.id, Sim.S_WIS)) / 100.0)
+			+ p.shield * Sim.HITS * (1 + (e.res + d.get(e.id, Sim.S_RES)) / 100.0))
+	}
+
+	// Effective hit points, plus the survivability its own stats still buy.
+	static real defence(Ent e, Delta d) {
+		real life = e.life + d.get(e.id, Sim.S_LIFE)
+		if (life <= 0) return 0.0
+
+		real ceiling = e.maxLife + d.get(e.id, Sim.S_MAXLIFE)
+		if (ceiling < 1) ceiling = 1.0
+		if (life > ceiling) life = ceiling
+
+		real rel = e.relShield + d.get(e.id, Sim.S_REL)
+		if (rel > 90) rel = 90.0
+		if (rel < -100) rel = -100.0
+
+		// Never name a local after a native: an `abs` here would shadow abs().
+		real flat = e.absShield + d.get(e.id, Sim.S_ABS)
+
+		real total = life * 100.0 / (100.0 - rel) + flat * Sim.HITS
+		total += (Sim.support(e, d) - Sim.support(e, Sim.EMPTY)) * Sim.HORIZON
+		return total
+	}
+
+	// Extra damage a side will deal because of this action, which is capital
+	// taken off the opposing pool.
+	static real pressure(Array<Ent> side, Delta d) {
+		real extra = 0.0
+		for (Ent e in side) {
+			if (e.life + d.get(e.id, Sim.S_LIFE) <= 0) continue
+			extra += Sim.output(e, d) - Sim.output(e, Sim.EMPTY)
+		}
+		return extra * Sim.HORIZON
+	}
+
+	static real ratio(Delta d) {
+		real ours = 0.0
+		real theirs = 0.0
+		for (Ent e in State.friends) ours += Sim.defence(e, d)
+		for (Ent e in State.foes) theirs += Sim.defence(e, d)
+
+		theirs -= Sim.pressure(State.friends, d)
+		ours -= Sim.pressure(State.foes, d)
+
+		if (ours < 1.0) ours = 1.0
+		if (theirs < 1.0) theirs = 1.0
+		return ours / theirs
+	}
+
+	static real gain(Delta d) {
+		return Sim.ratio(d) - Sim._base
+	}
+
+	/* -------------------------------------------------------------- simulation */
+
+	/*
+	 * Apply every effect of `spec` aimed at `at`, launched from `from`.
+	 * Returns the board change, not a score — scoring is the caller's job.
+	 */
+	static Delta apply(Spec spec, integer from, integer at) {
+		Delta d = new Delta()
+		Array<integer> cells = spec.splash(from, at)
+		boolean point = spec.zone == AREA_POINT
+
+		for (integer cell in cells) {
+			Ent? victim = State.at[cell]
+			if (victim == null) continue
+			Ent hit = victim
+			if (hit.life + d.get(hit.id, Sim.S_LIFE) <= 0) continue
+
+			// Area falloff is 20% per cell of Manhattan distance from the
+			// impact point, and it applies to every effect, not just damage.
+			real aoe = 1.0
+			if (!point) {
+				aoe = 1.0 - Board.dist(at, cell) * 0.2
+				if (aoe <= 0) continue
+			}
+
+			for (var row in spec.fx) {
+				if (!Sim.reaches(row[4] as integer, hit)) continue
+				Sim.resolve(d, hit, row, aoe)
+			}
+		}
+		return d
+	}
+
+	/*
+	 * The engine's filterTarget: five AND-gates, each bit must be SET for the
+	 * effect to be allowed to land on that class of entity.
+	 */
+	static boolean reaches(integer targets, Ent hit) {
+		if (hit.id == State.me) {
+			if ((targets & EFFECT_TARGET_CASTER) == 0) return false
+		} else if (hit.hostile) {
+			if ((targets & EFFECT_TARGET_ENEMIES) == 0) return false
+		} else {
+			if ((targets & EFFECT_TARGET_ALLIES) == 0) return false
+		}
+		if (hit.summoned) {
+			if ((targets & EFFECT_TARGET_SUMMONS) == 0) return false
+		} else {
+			if ((targets & EFFECT_TARGET_NON_SUMMONS) == 0) return false
+		}
+		return true
+	}
+
+	static void resolve(Delta d, Ent hit, Array<integer|real> row, real aoe) {
+		integer type = row[0] as integer
+		// The engine rolls one jet in [0,1] for the whole cast; we score the
+		// expectation, so the average of the declared range is exactly right.
+		real avg = ((row[1] as real) + (row[2] as real)) / 2.0
+		integer turns = row[3] as integer
+		if (avg == 0) return;
+
+		// Damage is the one family that has to run through the shields, so it
+		// is resolved here rather than as a plain stat delta.
+		if (type == EFFECT_DAMAGE) {
+			Sim.wound(d, hit, avg * State.strMul * aoe, true)
+			return;
+		}
+		if (type == EFFECT_LIFE_DAMAGE) {
+			Sim.wound(d, hit, avg / 100.0 * State.life * aoe, true)
+			return;
+		}
+		if (type == EFFECT_AFTEREFFECT) {
+			Sim.wound(d, hit, avg * State.sciMul * aoe, false)
+			return;
+		}
+		if (type == EFFECT_POISON) {
+			Sim.wound(d, hit, avg * State.magMul * aoe * max(1, turns) * Sim.LATER, false)
+			return;
+		}
+		if (type == EFFECT_KILL) {
+			d.add(hit.id, Sim.S_LIFE, -(hit.life + d.get(hit.id, Sim.S_LIFE)))
+			return;
+		}
+
+		integer stat = Sim.slotOf(type)
+		if (stat == Sim.S_NONE) return;
+
+		real value = avg * aoe * Sim.scaleOf(type)
+		if (Sim.drains(type)) value = -value
+
+		if (stat == Sim.S_LIFE) {
+			// Healing cannot overfill.
+			real room = hit.maxLife + d.get(hit.id, Sim.S_MAXLIFE)
+				- (hit.life + d.get(hit.id, Sim.S_LIFE))
+			if (value > room) value = room
+			if (value <= 0) return;
+		} else if (stat == Sim.S_MAXLIFE && value < 0) {
+			// Nova erodes the ceiling but never past current life.
+			real room = hit.life + d.get(hit.id, Sim.S_LIFE)
+				- (hit.maxLife + d.get(hit.id, Sim.S_MAXLIFE))
+			if (value < room) value = room
+		}
+
+		// A temporary buff is worth less than a permanent one; the horizon
+		// already prices duration, so anything shorter than it is discounted.
+		if (turns > 0 && turns < Sim.HORIZON && stat != Sim.S_LIFE && stat != Sim.S_MAXLIFE) {
+			value = value * turns / Sim.HORIZON
+		}
+
+		d.add(hit.id, stat, value)
+		if (type == EFFECT_BOOST_MAX_LIFE) d.add(hit.id, Sim.S_LIFE, value)
+	}
+
+	/*
+	 * Raw damage through the shields as they stand in this simulation, then
+	 * clamped to what is left of the target.
+	 */
+	static void wound(Delta d, Ent hit, real raw, boolean shielded) {
+		real dealt = raw
+		if (shielded) {
+			real pct = hit.relShield + d.get(hit.id, Sim.S_REL)
+			real flat = hit.absShield + d.get(hit.id, Sim.S_ABS)
+			dealt = raw - raw * pct / 100.0 - flat
+		}
+		if (dealt <= 0) return;
+		real left = hit.life + d.get(hit.id, Sim.S_LIFE)
+		if (dealt > left) dealt = left
+		d.add(hit.id, Sim.S_LIFE, -dealt)
+	}
+
+	/* ------------------------------------------------------- the effect table */
+
+	// Which stat an effect moves. Everything the engine can do to an entity is
+	// in here, so a chip nobody anticipated is still priced correctly.
+	static integer slotOf(integer type) {
+		if (type == EFFECT_HEAL || type == EFFECT_RAW_HEAL) return Sim.S_LIFE
+		if (type == EFFECT_BOOST_MAX_LIFE || type == EFFECT_NOVA_VITALITY) return Sim.S_MAXLIFE
+		if (type == EFFECT_NOVA_DAMAGE) return Sim.S_MAXLIFE
+
+		if (type == EFFECT_ABSOLUTE_SHIELD || type == EFFECT_RAW_ABSOLUTE_SHIELD) return Sim.S_ABS
+		if (type == EFFECT_ABSOLUTE_VULNERABILITY) return Sim.S_ABS
+		if (type == EFFECT_RELATIVE_SHIELD || type == EFFECT_RAW_RELATIVE_SHIELD) return Sim.S_REL
+		if (type == EFFECT_VULNERABILITY) return Sim.S_REL
+
+		if (type == EFFECT_BUFF_STRENGTH || type == EFFECT_RAW_BUFF_STRENGTH
+			|| type == EFFECT_SHACKLE_STRENGTH) return Sim.S_STR
+		if (type == EFFECT_RAW_BUFF_MAGIC || type == EFFECT_SHACKLE_MAGIC) return Sim.S_MAG
+		if (type == EFFECT_RAW_BUFF_SCIENCE) return Sim.S_SCI
+		if (type == EFFECT_BUFF_AGILITY || type == EFFECT_RAW_BUFF_AGILITY
+			|| type == EFFECT_SHACKLE_AGILITY) return Sim.S_AGI
+		if (type == EFFECT_BUFF_WISDOM || type == EFFECT_RAW_BUFF_WISDOM
+			|| type == EFFECT_SHACKLE_WISDOM) return Sim.S_WIS
+		if (type == EFFECT_BUFF_RESISTANCE || type == EFFECT_RAW_BUFF_RESISTANCE) return Sim.S_RES
+		if (type == EFFECT_BUFF_TP || type == EFFECT_RAW_BUFF_TP
+			|| type == EFFECT_SHACKLE_TP) return Sim.S_TP
+		if (type == EFFECT_BUFF_MP || type == EFFECT_RAW_BUFF_MP
+			|| type == EFFECT_SHACKLE_MP) return Sim.S_MP
+		if (type == EFFECT_RAW_BUFF_POWER) return Sim.S_POWER
+
+		return Sim.S_NONE
+	}
+
+	// Shackles, vulnerabilities and nova take away what their counterpart gives.
+	static boolean drains(integer type) {
+		return type == EFFECT_SHACKLE_STRENGTH
+			|| type == EFFECT_SHACKLE_MAGIC
+			|| type == EFFECT_SHACKLE_AGILITY
+			|| type == EFFECT_SHACKLE_WISDOM
+			|| type == EFFECT_SHACKLE_TP
+			|| type == EFFECT_SHACKLE_MP
+			|| type == EFFECT_VULNERABILITY
+			|| type == EFFECT_ABSOLUTE_VULNERABILITY
+			|| type == EFFECT_NOVA_DAMAGE
+	}
+
+	/*
+	 * The caster's own stats scale most effects. The "raw" family is the
+	 * exception — it is exactly the value printed on the item.
+	 */
+	static real scaleOf(integer type) {
+		if (type == EFFECT_HEAL) return State.wisMul
+		if (type == EFFECT_ABSOLUTE_SHIELD || type == EFFECT_RELATIVE_SHIELD) return State.resMul
+		if (type == EFFECT_NOVA_DAMAGE || type == EFFECT_NOVA_VITALITY) return State.sciMul
+		if (type == EFFECT_BOOST_MAX_LIFE) return State.wisMul
+		if (type == EFFECT_BUFF_STRENGTH || type == EFFECT_BUFF_AGILITY
+			|| type == EFFECT_BUFF_WISDOM || type == EFFECT_BUFF_RESISTANCE
+			|| type == EFFECT_BUFF_TP || type == EFFECT_BUFF_MP) return State.sciMul
+		if (type == EFFECT_SHACKLE_STRENGTH || type == EFFECT_SHACKLE_MAGIC
+			|| type == EFFECT_SHACKLE_AGILITY || type == EFFECT_SHACKLE_WISDOM
+			|| type == EFFECT_SHACKLE_TP || type == EFFECT_SHACKLE_MP) return State.magMul
+		return 1.0
+	}
+}

@@ -1,0 +1,305 @@
+/*
+ * Step 6: where to stand once there is nothing left to shoot.
+ *
+ * The plan called for a score field over the whole board with a preferred
+ * standoff band and an obstacle-shadow heuristic for cover. With 4 MP the
+ * reachable set is only ~40 cells, which is small enough to skip the
+ * heuristic entirely and ask the engine directly whether an enemy can see
+ * each candidate — the exact answer, for 31 operations a pair.
+ *
+ * Both halves of the trade are measured in hit points, and measured the same
+ * way: fill an entity's TP budget with the best of whatever it owns that
+ * reaches, and read off the damage. Ours is what we could deal from a cell,
+ * theirs is what could be dealt to us there, and a cell is worth the
+ * difference. That is why the trade has no tuned weight left in it at all: the
+ * one term that remains — what a hit point taken costs relative to a hit point
+ * dealt — is read off the two life pools, where before there were a firepower
+ * weight and a threat weight in units of nothing, balanced against each other
+ * by hand.
+ *
+ * Measuring firepower as damage rather than as a count of items that reach
+ * earns its keep twice over: a cell at range 10 where only spark reaches
+ * scores far below one at range 5 where the shotgun comes online, and a cell
+ * where three weak items reach no longer outscores one where the single item
+ * we could actually afford to fire twice does.
+ *
+ * The subtle part is that every item in this kit needs line of sight, and the
+ * engine's sight test is symmetric — so cover and a firing lane are the same
+ * lane. A hiding spot is therefore a real local optimum: stepping out of it
+ * gives up the cover bonus AND takes on the threat penalty, a cliff that no
+ * sane per-cell approach gradient outweighs. Hence `advance()`: when nothing
+ * on the whole reachable set can shoot, cover is worth nothing and closing the
+ * distance is the only move that changes the fight.
+ */
+class Field {
+	// What one hit point taken costs us, in hit points dealt.
+	//
+	// Derived, not tuned: trading hit point for hit point is only a fair deal
+	// against something our own size, so this is simply how much bigger their
+	// pool is than ours. Re-stat the leek, or meet something twice our weight,
+	// and the AI turns cautious on its own with nothing to edit.
+	static real risk = 1.0
+
+	// Both of these have to be current before anything asks about danger, and
+	// the firing step asks long before repositioning does — so Brain refreshes
+	// them at the top of every round rather than Field doing it on the way in.
+	static void gauge() {
+		real ours = 0.0
+		for (Ent e in State.friends) ours += e.maxLife
+		real theirs = 0.0
+		for (Ent e in State.foes) theirs += e.maxLife
+		if (ours < 1.0) ours = 1.0
+
+		real r = theirs / ours
+		// Clamped: a summon war or a nearly-dead opponent should not talk us
+		// into either suicide or total paralysis.
+		if (r < 0.5) r = 0.5
+		if (r > 3.0) r = 3.0
+		Field.risk = r * Field.winning()
+	}
+
+	/*
+	 * How far ahead or behind we are right now, on tagadalive's curve: current
+	 * life AND head count, averaged, mapped to 0.5 when comfortably ahead and
+	 * 1.5 when losing. The structural term above says how our BUILD compares;
+	 * this says how the fight is actually going.
+	 *
+	 * It replaces a hand-rolled 1 + 2*(1 - lifeRatio), which reached 3.0 at
+	 * death's door and made the AI stop fighting exactly when trading was the
+	 * only thing left that could win.
+	 */
+	static real winning() {
+		real ourLife = 0.0
+		integer ourCount = 0
+		for (Ent e in State.friends) {
+			ourLife += e.life
+			ourCount++
+		}
+		real theirLife = 0.0
+		integer theirCount = 0
+		for (Ent e in State.foes) {
+			theirLife += e.life
+			theirCount++
+		}
+
+		real byLife = theirLife > 0 ? ourLife / theirLife : 1.0
+		real byHead = theirCount > 0 ? (ourCount as real) / theirCount : 1.0
+		real m = 1.5 - 0.5 * (byLife + byHead) / 2.0
+		if (m < 0.5) m = 0.5
+		if (m > 1.5) m = 1.5
+		return m
+	}
+
+	// How much of a foe's burst survives a broken line of sight. Not zero — it
+	// has movement, and most of what it needs is one step sideways.
+	static real COVER = 0.35
+
+	// tagadalive's CANDIE_MODIFIER: how much worse a cell that can kill us is
+	// than the same damage spread over cells that cannot.
+	static real LETHAL = 5.0
+
+	static real W_APPROACH = 40.0
+	static real W_HIDE = 120.0        // approach tie-break only, own scale
+	static real W_ALLY = 6.0
+	static integer ALLY_SPAN = 8
+
+	static void reposition() {
+		if (State.mp <= 0) return;
+		if (count(State.foes) == 0) return;
+
+		Board.walk(State.cell, State.mp, State.blocked)
+
+		integer target = State.cell
+		real top = -1000000.0
+		boolean armed = false
+
+		for (integer cell in Board.order) {
+			real pw = Field.power(cell)
+			if (pw > 0) armed = true
+			real s = Field.score(cell, pw)
+			if (s > top) {
+				top = s
+				target = cell
+			}
+		}
+
+		if (!armed) {
+			Field.advance()
+			return;
+		}
+		if (target != State.cell) moveTowardCell(target, Board.cost[target] ?? State.mp)
+	}
+
+	/*
+	 * Where each foe could actually be standing when it shoots.
+	 *
+	 * The old model let an enemy close `move` cells in a straight line through
+	 * anything, so a foe four cells away in Manhattan but twelve by path was
+	 * priced as if it were on top of us. That made real cover look worthless
+	 * and had us running from threats that could not arrive.
+	 */
+	static Map<integer, Array<integer>> _stand = [:]
+	static integer _surveyTurn = -1
+	static integer _surveyFoes = -1
+
+	// Enemies do not move while we are taking our turn, so their reachable sets
+	// are a fact of the turn, not of the moment. Recomputed only when the turn
+	// changes or somebody dies.
+	static void survey() {
+		integer turn = getTurn() ?? 0
+		integer heads = count(State.foes)
+		if (Field._surveyTurn == turn && Field._surveyFoes == heads) return;
+		Field._surveyTurn = turn
+		Field._surveyFoes = heads
+
+		Field._stand = [:]
+		Field._peril = [:]
+		for (Ent foe in State.foes) {
+			Field._stand[foe.id] = Board.reach(foe.cell, foe.move, State.blocked)
+		}
+	}
+
+	/*
+	 * Risk-weighted damage that could land on `cell` before we act again.
+	 *
+	 * Split out of score() so the firing step can ask "how dangerous is it to
+	 * stand here" without also being told how good the cell is for shooting
+	 * NEXT turn — and so the two steps can never disagree about what danger
+	 * means. Cached per turn for the same reason survey() is.
+	 */
+	static Map<integer, real> _peril = [:]
+
+	static real peril(integer cell) {
+		real? seen = Field._peril[cell]
+		if (seen != null) return seen
+
+		real incoming = 0.0
+		for (Ent foe in State.foes) {
+			// Price it from the closest cell its own legs can actually get it
+			// to, not from where it happens to stand now.
+			Array<integer>? stands = Field._stand[foe.id]
+			integer from = stands == null ? foe.cell : Board.closest(stands, cell)
+			if (from < 0) from = foe.cell
+
+			real burst = Kit.burstAt(foe.id, max(1, Board.dist(from, cell)))
+			if (burst <= 0) continue
+			if (!(lineOfSight(from, cell) ?? true)) burst = burst * Field.COVER
+			incoming += burst
+		}
+
+		real cost = Field.risk * incoming
+		// Dying is not a linear amount of bad. A cell where what can land on us
+		// exceeds what we have left is in a different category from one that
+		// merely hurts, and no linear risk term says so.
+		if (incoming > 0 && incoming >= State.life) {
+			cost += Field.risk * incoming * (Field.LETHAL - 1.0)
+		}
+
+		Field._peril[cell] = cost
+		return cost
+	}
+
+	static real score(integer cell, real pw) {
+		real total = pw - Field.peril(cell)
+
+		for (Ent friend in State.friends) {
+			if (friend.id == State.me) continue
+			integer d = Board.dist(cell, friend.cell)
+			if (d < Field.ALLY_SPAN) total += Field.W_ALLY * (Field.ALLY_SPAN - d)
+		}
+
+		return total
+	}
+
+	/*
+	 * Nothing in reach from anywhere we can walk: close the gap. Sitting safe
+	 * behind a wall we can never shoot past is exactly how a fight becomes a
+	 * 65-turn draw, so cover here is a tie-breaker among cells that all make
+	 * progress, never a reason to stand still.
+	 *
+	 * The last resort hands the move to the engine's own pathfinder. Manhattan
+	 * distance is obstacle blind, so in a pocket every reachable cell measures
+	 * no closer than the one we stand on and the AI re-picks its own cell
+	 * forever; escaping means walking around the wall, which looks like moving
+	 * backwards. moveToward costs 2500 operations and is only reached when the
+	 * turn had nothing better to do anyway.
+	 */
+	static void advance() {
+		Ent? nearest = null
+		integer here = 999
+		for (Ent foe in State.foes) {
+			integer d = Board.dist(State.cell, foe.cell)
+			if (d < here) {
+				here = d
+				nearest = foe
+			}
+		}
+		if (nearest == null) return;
+
+		// Among the cells that genuinely close the gap, take the one the fewest
+		// enemies can see. Walking up in the open hands them a free turn of
+		// shooting before we are close enough to answer.
+		integer target = -1
+		real top = -1000000.0
+		for (integer cell in Board.order) {
+			integer gap = 99
+			for (Ent foe in State.foes) {
+				integer d = Board.dist(cell, foe.cell)
+				if (d < gap) gap = d
+			}
+			if (gap >= here) continue
+
+			real s = -Field.W_APPROACH * gap
+			for (Ent foe in State.foes) {
+				if (!(lineOfSight(foe.cell, cell) ?? true)) s += Field.W_HIDE
+			}
+			if (s > top) {
+				top = s
+				target = cell
+			}
+		}
+
+		if (target < 0) {
+			moveToward(nearest.id, State.mp)
+			return;
+		}
+		moveTowardCell(target, Board.cost[target] ?? State.mp)
+	}
+
+	/*
+	 * Damage we could actually deal from `cell` next turn: a full TP budget
+	 * spent greedily on whichever of our items can be aimed at something from
+	 * here. TP and per-turn use counts will have reset by then, so a fresh
+	 * budget is the honest one.
+	 *
+	 * Unlike the threat term this checks launch geometry, and it matters more
+	 * than it sounds: the heaviest weapon in this kit fires along the axes
+	 * only, so half the cells at the right range cannot use it at all and the
+	 * old measure could not tell them apart.
+	 */
+	static real power(integer cell) {
+		integer tp = getTotalTP() ?? State.tp
+		real total = 0.0
+		for (Shell s in Kit.arsenalOf(State.me)) {
+			if (tp < s.cost) continue
+
+			boolean reaches = false
+			for (Ent foe in State.foes) {
+				integer d = Board.dist(cell, foe.cell)
+				if (d < s.lo || d > s.hi) continue
+				if (!Board.aimable(s.launch, cell, foe.cell)) continue
+				if (s.sight && !(lineOfSight(cell, foe.cell) ?? false)) continue
+				reaches = true
+				break
+			}
+			if (!reaches) continue
+
+			integer shots = floor(tp / s.cost)
+			if (s.uses >= 0 && shots > s.uses) shots = s.uses
+			if (shots <= 0) continue
+			total += shots * s.dmg
+			tp -= shots * s.cost
+		}
+		return total
+	}
+}

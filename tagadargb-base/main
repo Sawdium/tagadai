@@ -1,0 +1,5 @@
+include('auto')
+
+Brain.play()
+
+debug('turn ' + getTurn() + ' ops ' + getOperations() + '/' + getMaxOperations())

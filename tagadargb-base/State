@@ -1,0 +1,144 @@
+/*
+ * Everything the turn's decisions read about the board, snapshotted once and
+ * then re-snapshotted after each action we actually play — so the next round
+ * of the loop scores against corpses, spent cooldowns and new shields.
+ */
+class Ent {
+	integer id
+	integer cell
+	real life
+	real maxLife
+	real absShield
+	real relShield
+	boolean hostile
+	boolean summoned
+	integer envelope         // how far it could reach us: full MP + damage range
+
+	// Everything a buff or a shackle can move. Kept per entity so the same
+	// pricing code works on us, an ally or an enemy.
+	real tp
+	real str
+	real mag
+	real sci
+	real agi
+	real wis
+	real res
+	real power
+
+	// 1.0 when this entity can actually bring its damage to bear soon, a small
+	// fraction when it cannot reach anything. Set once the whole board is known.
+	real engagement = 1.0
+
+	constructor(integer id, integer cell, boolean hostile) {
+		this.id = id
+		this.cell = cell
+		this.hostile = hostile
+		this.life = getLife(id) ?? 0
+		this.maxLife = max(1, getTotalLife(id) ?? 1)
+		this.absShield = getAbsoluteShield(id) ?? 0
+		this.relShield = getRelativeShield(id) ?? 0
+		this.summoned = isSummon(id) ?? false
+		this.tp = getTotalTP(id) ?? 0
+		this.str = getStrength(id) ?? 0
+		this.mag = getMagic(id) ?? 0
+		this.sci = getScience(id) ?? 0
+		this.agi = getAgility(id) ?? 0
+		this.wis = getWisdom(id) ?? 0
+		this.res = getResistance(id) ?? 0
+		this.power = getPower(id) ?? 0
+		// getMP reports what is LEFT this round, so an enemy that already
+		// played looks immobile. getTotalMP is the honest threat radius.
+		this.envelope = (getTotalMP(id) ?? 0) + Kit.reachOf(id)
+	}
+}
+
+class State {
+	static integer me = 0
+	static integer cell = 0
+	static integer held = -1          // weapon currently in hand
+	static integer tp = 0
+	static integer mp = 0
+	static real life = 0
+	static real maxLife = 1
+
+	// Stat scaling, re-read every turn: buffs and debuffs move these.
+	static real strMul = 1.0          // direct damage
+	static real magMul = 1.0          // poison
+	static real wisMul = 1.0          // healing
+	static real sciMul = 1.0          // nova / aftereffect
+	static real resMul = 1.0          // shields we cast
+
+	static Array<Ent> all = []
+	static Array<Ent> foes = []
+	static Array<Ent> friends = []    // allies AND us
+	static Map<integer, Ent> at = [:] // cell -> occupant
+	static Map<integer, boolean> blocked = [:]
+
+	static void refresh() {
+		State.me = getEntity()
+		State.cell = getCell() ?? 0
+		State.held = getWeapon() ?? -1
+		State.tp = getTP() ?? 0
+		State.mp = getMP() ?? 0
+		State.life = getLife() ?? 0
+		State.maxLife = max(1, getTotalLife() ?? 1)
+
+		real power = 1 + (getPower() ?? 0) / 100.0
+		State.strMul = (1 + max(0, getStrength() ?? 0) / 100.0) * power
+		State.magMul = (1 + max(0, getMagic() ?? 0) / 100.0) * power
+		State.wisMul = 1 + (getWisdom() ?? 0) / 100.0
+		State.sciMul = (1 + max(0, getScience() ?? 0) / 100.0) * power
+		State.resMul = 1 + (getResistance() ?? 0) / 100.0
+
+		State.all = []
+		State.foes = []
+		State.friends = []
+		State.at = [:]
+		State.blocked = [:]
+
+		Array<integer>? enemies = getAliveEnemies()
+		if (enemies != null) {
+			for (integer e in enemies) {
+				integer? on = getCell(e)
+				if (on == null) continue
+				Ent ent = new Ent(e, on, true)
+				push(State.all, ent)
+				push(State.foes, ent)
+				State.at[on] = ent
+				State.blocked[on] = true
+			}
+		}
+
+		Array<integer>? allies = getAliveAllies()
+		if (allies != null) {
+			for (integer a in allies) {
+				integer? on = getCell(a)
+				if (on == null) continue
+				Ent ent = new Ent(a, on, false)
+				push(State.all, ent)
+				push(State.friends, ent)
+				State.at[on] = ent
+				// Our own cell is not an obstacle to ourselves.
+				if (a != State.me) State.blocked[on] = true
+			}
+		}
+
+		// Second pass: an entity's output is only worth what it can deliver.
+		// Without this the AI happily spends its turn buffing strength while
+		// the enemy is twelve cells away and the buff expires before contact.
+		for (Ent e in State.all) {
+			integer span = Kit.reachOf(e.id) + (getTotalMP(e.id) ?? 0)
+			integer best = 99
+			for (Ent other in State.all) {
+				if (other.hostile == e.hostile) continue
+				integer d = Board.dist(e.cell, other.cell)
+				if (d < best) best = d
+			}
+			e.engagement = best <= span ? 1.0 : Sim.IDLE
+		}
+	}
+
+	static real lifeRatio() {
+		return State.life / State.maxLife
+	}
+}

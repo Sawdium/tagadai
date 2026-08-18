@@ -1,0 +1,229 @@
+/*
+ * Steps 1 and 4: enumerate every action, then try to play them best-first.
+ *
+ * An action is "use this item, aimed at this cell". It carries no position of
+ * its own — where we have to stand is worked out only when we actually try to
+ * play it, which is what keeps generation cheap enough to redo after every
+ * single action.
+ */
+class Shot {
+	Spec spec
+	integer at            // impact cell
+	real score            // change in the capital ratio
+	real rate             // that change per TP spent
+	boolean tried = false
+
+	/*
+	 * Value per point of TP — plus the cooldown, tagadalive's opportunity cost.
+	 * Spending a chip that then sits idle for six turns is not the same deal as
+	 * spending one we can cast again immediately, even at identical TP, and
+	 * ranking on TP alone cannot see the difference.
+	 */
+	constructor(Spec spec, integer at, real score, integer cost) {
+		this.spec = spec
+		this.at = at
+		this.score = score
+		this.rate = score / max(1, cost + spec.cool)
+	}
+}
+
+class Plan {
+	// Flip on to see every action the AI weighs and plays.
+	static boolean TRACE = false
+
+	/*
+	 * Every item crossed with every entity on the board — including ourselves
+	 * and our allies, because an area weapon aimed at an enemy standing next
+	 * to us is exactly the mistake this AI has to be able to see coming.
+	 */
+	static Array<Shot> generate() {
+		Array<Shot> shots = []
+		for (Spec spec in Kit.all) {
+			if (!spec.ready()) continue
+			integer cost = spec.realCost(State.held)
+			if (cost > State.tp) continue
+
+			for (integer at in Plan.aims(spec)) {
+				// A weapon can never be aimed at the cell you stand on, and a
+				// chip can never be aimed into a wall.
+				if (spec.isGun && at == State.cell) continue
+				if (!spec.isGun && Board.solid[at]) continue
+				// Cheap reject before simulating: nothing in the kit can be
+				// fired further than its own max range from anywhere we could
+				// walk to this turn.
+				if (Board.dist(State.cell, at) - State.mp > spec.maxRange) continue
+
+				Delta d = Sim.apply(spec, State.cell, at)
+				real score = Sim.gain(d)
+				if (score <= 0) continue
+				push(shots, new Shot(spec, at, score, cost))
+			}
+
+			// A support item with a minimum range cannot be aimed at our own
+			// feet, so aiming only at entities makes it unusable. Offer it the
+			// nearest legal empty cells instead and let the area do the work —
+			// that is the only way a chip like drip ever heals us.
+			if (spec.canMend && spec.minRange > 0) {
+				for (integer spot in Plan.nearby(spec.minRange)) {
+					if (State.at[spot] != null) continue
+					Delta d = Sim.apply(spec, State.cell, spot)
+					real score = Sim.gain(d)
+					if (score <= 0) continue
+					push(shots, new Shot(spec, spot, score, cost))
+				}
+			}
+		}
+		return shots
+	}
+
+	/*
+	 * Every cell worth aiming this item at.
+	 *
+	 * The cells entities stand on are only the obvious ones. For anything with
+	 * an area, the cell BETWEEN two enemies is the one that matters, and no
+	 * amount of aiming at entities will ever find it.
+	 *
+	 * Rather than tabulate the radius of all fifteen area shapes, ask the
+	 * engine the question it already answers: which cells does a blast aimed at
+	 * this entity cover? For every symmetric shape that set is exactly the set
+	 * of cells whose blast would cover the entity — the candidates we want —
+	 * and taking the union over entities gives the overlaps for free.
+	 *
+	 * The nice property is that it costs nothing when it buys nothing: for a
+	 * point item `splash` short-circuits to the entity's own cell without
+	 * touching a native, so a kit with no area weapon generates exactly the
+	 * list it generated before.
+	 *
+	 * Direction-dependent shapes (a laser) are approximated by this, which is
+	 * safe rather than exact: a candidate the engine disagrees with simply
+	 * fails `legal` or `canUseWeaponOnCell` and the turn moves on.
+	 */
+	static Array<integer> aims(Spec spec) {
+		Array<integer> out = []
+		Map<integer, boolean> seen = [:]
+		for (Ent target in State.all) {
+			for (integer cell in spec.splash(State.cell, target.cell)) {
+				if (seen[cell] != null) continue
+				seen[cell] = true
+				push(out, cell)
+			}
+		}
+		return out
+	}
+
+	// The eight cells exactly `d` away from us along the axes and diagonals.
+	static Array<integer> nearby(integer d) {
+		Array<integer> out = []
+		integer x = Board.px[State.cell]
+		integer y = Board.py[State.cell]
+		integer h = d / 2
+		Plan._spot(out, x + d, y)
+		Plan._spot(out, x - d, y)
+		Plan._spot(out, x, y + d)
+		Plan._spot(out, x, y - d)
+		Plan._spot(out, x + h, y + (d - h))
+		Plan._spot(out, x + h, y - (d - h))
+		Plan._spot(out, x - h, y + (d - h))
+		Plan._spot(out, x - h, y - (d - h))
+		return out
+	}
+
+	static void _spot(Array<integer> out, integer x, integer y) {
+		integer? cell = getCellFromXY(x, y)
+		if (cell == null) return;
+		if (Board.solid[cell]) return;
+		push(out, cell)
+	}
+
+	// Best remaining action by value per TP. A linear scan beats sorting here:
+	// the list is short and we usually only ever want the first few.
+	static Shot? best(Array<Shot> shots) {
+		Shot? pick = null
+		real top = 0.0
+		for (Shot s in shots) {
+			if (s.tried) continue
+			if (pick == null || s.rate > top) {
+				pick = s
+				top = s.rate
+			}
+		}
+		return pick
+	}
+
+	/*
+	 * Walk to the cheapest cell this shot can be taken from, then take it.
+	 * Board.order is BFS order, so the first legal cell in it is also the one
+	 * that leaves the most MP for the retreat.
+	 *
+	 * That last sentence is load-bearing, and three measurements say so. Making
+	 * this step danger-aware — which it plainly is not, and which looks like an
+	 * obvious gap — was tried in full and every version was worse or useless
+	 * (800 fights each, C10/C11):
+	 *
+	 *   safest legal cell + decline shots that cost more danger than they buy
+	 *       21.9%  — catastrophic
+	 *   safest legal cell, no declining
+	 *       30.9%  — still catastrophic
+	 *   cheapest cell, danger only breaking ties between equal-cost cells
+	 *       49.6%  — neutral, so not worth the code
+	 *
+	 * Two reasons it fails. Peril is not a cost of FIRING: the enemy closes on
+	 * us whether or not we shoot, so hanging back never avoids the damage, it
+	 * only forgoes dealing any — danger buys reach, which is the trade
+	 * `Field.score` already makes against firepower, and charging it again here
+	 * double-counts. And `Brain` fires up to twelve times a turn, so walking to
+	 * a safer cell for the first shot spends the MP the later ones needed to
+	 * reach at all; damage dealt fell from 340 to 282 on exactly that.
+	 *
+	 * The place to spend effort is C11 done properly — a real MP reserve — not
+	 * making this function clever.
+	 */
+	static boolean fire(Shot shot) {
+		if (Plan.TRACE) {
+			debug('try ' + shot.spec.label + ' -> ' + shot.at
+				+ ' score ' + shot.score + ' rate ' + shot.rate)
+		}
+		Board.walk(State.cell, State.mp, State.blocked)
+
+		integer stand = -1
+		for (integer cell in Board.order) {
+			if (Plan.legal(cell, shot)) {
+				stand = cell
+				break
+			}
+		}
+		if (stand < 0) return false
+
+		if (stand != State.cell) {
+			moveTowardCell(stand, Board.cost[stand] ?? State.mp)
+			if ((getCell() ?? -1) != stand) return false
+		}
+
+		if (shot.spec.isGun) {
+			if (State.held != shot.spec.id) {
+				setWeapon(shot.spec.id)
+				State.held = shot.spec.id
+			}
+			if (!(canUseWeaponOnCell(shot.spec.id, shot.at) ?? false)) return false
+			return (useWeaponOnCell(shot.at) ?? 0) > 0
+		}
+
+		if (!(canUseChipOnCell(shot.spec.id, shot.at) ?? false)) return false
+		return (useChipOnCell(shot.spec.id, shot.at) ?? 0) > 0
+	}
+
+	// Everything the engine checks in verifyRange + verifyLoS, done by hand
+	// because the natives that answer it (getCellsToUseWeapon, 25834 ops)
+	// would eat the turn.
+	static boolean legal(integer from, Shot shot) {
+		Spec spec = shot.spec
+		if (spec.isGun && from == shot.at) return false
+		if (!spec.isGun && Board.solid[shot.at]) return false
+
+		integer d = Board.dist(from, shot.at)
+		if (d < spec.minRange || d > spec.maxRange) return false
+		if (!Board.aimable(spec.launch, from, shot.at)) return false
+		if (spec.needSight && !(lineOfSight(from, shot.at) ?? false)) return false
+		return true
+	}
+}

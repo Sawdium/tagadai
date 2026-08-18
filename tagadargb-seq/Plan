@@ -1,0 +1,359 @@
+/*
+ * Steps 1 and 4: enumerate every action, then try to play them best-first.
+ *
+ * An action is "use this item, aimed at this cell". It carries no position of
+ * its own — where we have to stand is worked out only when we actually try to
+ * play it, which is what keeps generation cheap enough to redo after every
+ * single action.
+ */
+class Shot {
+	Spec spec
+	integer at            // impact cell
+	real score            // change in the capital ratio
+	real rate             // that change per TP spent
+	real plan             // best whole-turn gain of a sequence that opens with this
+	integer stand = -1    // cheapest cell this can actually be fired from, -1 if none
+	boolean tried = false
+
+	constructor(Spec spec, integer at, real score, integer cost) {
+		this.spec = spec
+		this.at = at
+		this.score = score
+		this.rate = score / max(1, cost)
+		this.plan = score
+	}
+}
+
+/*
+ * One action inside a candidate sequence: the board after it, what is left to
+ * spend, and which opening move the sequence descends from.
+ */
+class Step {
+	Delta board
+	integer tp
+	integer held
+	integer stand         // where the sequence left us standing
+	Map<integer, integer> spent = [:]
+	Shot root
+	real score = 0.0
+}
+
+class Plan {
+	// Flip on to see every action the AI weighs and plays.
+	static boolean TRACE = false
+
+	// Sequence search. Ordering actions by value-per-TP is myopic about the TP
+	// budget: it will take a cheap efficient shot and then be unable to afford
+	// the expensive one that would have made the better turn. Searching short
+	// sequences and keeping only the opening move fixes that, and pays for the
+	// weapon swap out of the whole sequence rather than out of the first shot.
+	static integer WIDE = 8          // distinct actions considered per step
+	static integer BEAM = 3          // partial sequences carried forward
+	static integer DEPTH = 3         // actions deep
+
+	// Uses each item has left this turn, read once so the search stays free of
+	// native calls.
+	static Map<integer, integer> left = [:]
+
+	/*
+	 * Every item crossed with every entity on the board — including ourselves
+	 * and our allies, because an area weapon aimed at an enemy standing next
+	 * to us is exactly the mistake this AI has to be able to see coming.
+	 */
+	static Array<Shot> generate() {
+		Array<Shot> shots = []
+		Plan.left = [:]
+		for (Spec spec in Kit.all) {
+			if (!spec.ready()) continue
+			Plan.left[spec.id] = spec.usesLeft()
+			integer cost = spec.realCost(State.held)
+			if (cost > State.tp) continue
+
+			for (Ent target in State.all) {
+				// A weapon can never be aimed at the cell you stand on.
+				if (spec.isGun && target.cell == State.cell) continue
+				// Cheap reject before simulating: nothing in the kit can be
+				// fired further than its own max range from anywhere we could
+				// walk to this turn.
+				if (Board.dist(State.cell, target.cell) - State.mp > spec.maxRange) continue
+
+				Delta d = Sim.apply(spec, State.cell, target.cell)
+				real score = Sim.gain(d)
+				if (score <= 0) continue
+				push(shots, new Shot(spec, target.cell, score, cost))
+			}
+
+			// A support item with a minimum range cannot be aimed at our own
+			// feet, so aiming only at entities makes it unusable. Offer it the
+			// nearest legal empty cells instead and let the area do the work —
+			// that is the only way a chip like drip ever heals us.
+			if (spec.canMend && spec.minRange > 0) {
+				for (integer spot in Plan.nearby(spec.minRange)) {
+					if (State.at[spot] != null) continue
+					Delta d = Sim.apply(spec, State.cell, spot)
+					real score = Sim.gain(d)
+					if (score <= 0) continue
+					push(shots, new Shot(spec, spot, score, cost))
+				}
+			}
+		}
+		return shots
+	}
+
+	// The eight cells exactly `d` away from us along the axes and diagonals.
+	static Array<integer> nearby(integer d) {
+		Array<integer> out = []
+		integer x = Board.px[State.cell]
+		integer y = Board.py[State.cell]
+		integer h = d / 2
+		Plan._spot(out, x + d, y)
+		Plan._spot(out, x - d, y)
+		Plan._spot(out, x, y + d)
+		Plan._spot(out, x, y - d)
+		Plan._spot(out, x + h, y + (d - h))
+		Plan._spot(out, x + h, y - (d - h))
+		Plan._spot(out, x - h, y + (d - h))
+		Plan._spot(out, x - h, y - (d - h))
+		return out
+	}
+
+	static void _spot(Array<integer> out, integer x, integer y) {
+		integer? cell = getCellFromXY(x, y)
+		if (cell == null) return;
+		if (Board.solid[cell]) return;
+		push(out, cell)
+	}
+
+	// Best remaining opening move. A linear scan beats sorting here: the list
+	// is short and we usually only ever want the first few.
+	static Shot? best(Array<Shot> shots) {
+		Shot? pick = null
+		real top = 0.0
+		for (Shot s in shots) {
+			if (s.tried) continue
+			if (pick == null || s.plan > top) {
+				pick = s
+				top = s.plan
+			}
+		}
+		return pick
+	}
+
+	/*
+	 * Score each candidate opening by the best whole turn that can follow it.
+	 *
+	 * A beam, not an exhaustive search: only the WIDE best actions by rate are
+	 * ever considered, and only BEAM partial sequences survive each level. The
+	 * turn is at most four actions long, so this sees essentially all of it.
+	 */
+	static void rank(Array<Shot> shots, integer ceiling) {
+		Array<Shot> seeds = Plan.seeds(shots)
+		if (count(seeds) < 2) return;
+
+		/*
+		 * Anchor every sequence to a real position. Without this the search
+		 * happily justifies an opening move with a follow-up that could only be
+		 * fired from where we are standing now — but the opening move is usually
+		 * what makes us walk somewhere else. An unreachable opener is also worth
+		 * knowing about: it drops to the bottom of the ranking instead of
+		 * burning one of Brain's execution attempts.
+		 */
+		Board.walk(State.cell, State.mp, State.blocked)
+		for (Shot s in seeds) {
+			s.stand = -1
+			for (integer cell in Board.order) {
+				if (Plan.legal(cell, s)) {
+					s.stand = cell
+					break
+				}
+			}
+			if (s.stand < 0) s.plan = 0.0
+		}
+		Shot? byRate = null
+		if (Plan.TRACE) {
+			real topRate = 0.0
+			for (Shot s in shots) {
+				if (byRate == null || s.rate > topRate) { byRate = s; topRate = s.rate }
+			}
+		}
+
+		Array<Step> beam = []
+		for (Shot s in seeds) {
+			if (s.stand < 0) continue
+			Step? first = Plan.extend(null, s, s)
+			if (first == null) continue
+			push(beam, first)
+			if (first.score > s.plan) s.plan = first.score
+		}
+
+		for (integer depth = 1; depth < Plan.DEPTH; depth++) {
+			if (getOperations() > ceiling) break
+			beam = Plan.trim(beam)
+			if (count(beam) == 0) break
+
+			Array<Step> grown = []
+			for (Step parent in beam) {
+				for (Shot s in seeds) {
+					Step? next = Plan.extend(parent, s, parent.root)
+					if (next == null) continue
+					push(grown, next)
+					if (next.score > next.root.plan) next.root.plan = next.score
+				}
+			}
+			if (count(grown) == 0) break
+			beam = grown
+		}
+
+		if (Plan.TRACE && byRate != null) {
+			Shot? byPlan = null
+			real topPlan = 0.0
+			for (Shot s in shots) {
+				if (byPlan == null || s.plan > topPlan) { byPlan = s; topPlan = s.plan }
+			}
+			if (byPlan != null && byPlan != byRate) {
+				debug('SWITCH ' + byRate.spec.label + ' -> ' + byPlan.spec.label)
+			} else {
+				debug('same ' + byRate.spec.label)
+			}
+		}
+	}
+
+	// The WIDE best actions by value per TP, which is a fine filter even though
+	// it is a poor final ordering.
+	static Array<Shot> seeds(Array<Shot> shots) {
+		Array<Shot> out = []
+		Array<boolean> taken = []
+		for (Shot s in shots) push(taken, false)
+
+		for (integer n = 0; n < Plan.WIDE; n++) {
+			integer best = -1
+			real top = 0.0
+			for (integer i = 0; i < count(shots); i++) {
+				if (taken[i]) continue
+				if (best < 0 || shots[i].rate > top) {
+					best = i
+					top = shots[i].rate
+				}
+			}
+			if (best < 0) break
+			taken[best] = true
+			push(out, shots[best])
+		}
+		return out
+	}
+
+	static Array<Step> trim(Array<Step> steps) {
+		if (count(steps) <= Plan.BEAM) return steps
+		Array<Step> out = []
+		Array<boolean> taken = []
+		for (Step st in steps) push(taken, false)
+
+		for (integer n = 0; n < Plan.BEAM; n++) {
+			integer best = -1
+			real top = 0.0
+			for (integer i = 0; i < count(steps); i++) {
+				if (taken[i]) continue
+				if (best < 0 || steps[i].score > top) {
+					best = i
+					top = steps[i].score
+				}
+			}
+			if (best < 0) break
+			taken[best] = true
+			push(out, steps[best])
+		}
+		return out
+	}
+
+	// Play `shot` after `parent`, or return null if the turn cannot afford it.
+	static Step? extend(Step? parent, Shot shot, Shot root) {
+		Spec spec = shot.spec
+		Delta board = parent == null ? Sim.EMPTY : parent.board
+		integer tp = parent == null ? State.tp : parent.tp
+		integer held = parent == null ? State.held : parent.held
+
+		// Everything after the opening move has to be castable from wherever
+		// that move left us.
+		if (parent != null && !Plan.legal(parent.stand, shot)) return null
+
+		integer already = 0
+		if (parent != null) already = parent.spent[spec.id] ?? 0
+		if (already >= (Plan.left[spec.id] ?? 0)) return null
+		// A chip with a cooldown can only be cast once in a turn.
+		if (!spec.isGun && spec.reload > 0 && already >= 1) return null
+
+		integer cost = spec.realCost(held)
+		if (cost > tp) return null
+
+		// Never keep shooting something that the sequence has already killed.
+		Ent? mark = State.at[shot.at]
+		if (mark != null && mark.life + board.get(mark.id, Sim.S_LIFE) <= 0) return null
+
+		Step step = new Step()
+		step.board = Sim.chain(board, spec, State.cell, shot.at)
+		step.score = Sim.gain(step.board)
+		step.tp = tp - cost
+		step.held = spec.isGun ? spec.id : held
+		step.stand = parent == null ? shot.stand : parent.stand
+		step.root = root
+		if (parent != null) {
+			for (integer id : integer n in parent.spent) step.spent[id] = n
+		}
+		step.spent[spec.id] = already + 1
+		return step
+	}
+
+	/*
+	 * Walk to the cheapest cell this shot can be taken from, then take it.
+	 * Board.order is BFS order, so the first legal cell in it is also the one
+	 * that leaves the most MP for the retreat.
+	 */
+	static boolean fire(Shot shot) {
+		if (Plan.TRACE) {
+			debug('try ' + shot.spec.label + ' -> ' + shot.at
+				+ ' score ' + shot.score + ' rate ' + shot.rate)
+		}
+		Board.walk(State.cell, State.mp, State.blocked)
+
+		integer stand = -1
+		for (integer cell in Board.order) {
+			if (Plan.legal(cell, shot)) {
+				stand = cell
+				break
+			}
+		}
+		if (stand < 0) return false
+
+		if (stand != State.cell) {
+			moveTowardCell(stand, Board.cost[stand] ?? State.mp)
+			if ((getCell() ?? -1) != stand) return false
+		}
+
+		if (shot.spec.isGun) {
+			if (State.held != shot.spec.id) {
+				setWeapon(shot.spec.id)
+				State.held = shot.spec.id
+			}
+			if (!(canUseWeaponOnCell(shot.spec.id, shot.at) ?? false)) return false
+			return (useWeaponOnCell(shot.at) ?? 0) > 0
+		}
+
+		if (!(canUseChipOnCell(shot.spec.id, shot.at) ?? false)) return false
+		return (useChipOnCell(shot.spec.id, shot.at) ?? 0) > 0
+	}
+
+	// Everything the engine checks in verifyRange + verifyLoS, done by hand
+	// because the natives that answer it (getCellsToUseWeapon, 25834 ops)
+	// would eat the turn.
+	static boolean legal(integer from, Shot shot) {
+		Spec spec = shot.spec
+		if (spec.isGun && from == shot.at) return false
+		if (!spec.isGun && Board.solid[shot.at]) return false
+
+		integer d = Board.dist(from, shot.at)
+		if (d < spec.minRange || d > spec.maxRange) return false
+		if (!Board.aimable(spec.launch, from, shot.at)) return false
+		if (spec.needSight && !(lineOfSight(from, shot.at) ?? false)) return false
+		return true
+	}
+}

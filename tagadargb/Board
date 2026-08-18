@@ -1,0 +1,163 @@
+/*
+ * Static board geometry.
+ *
+ * Obstacles are fixed for the whole fight (every setObstacle call in the
+ * generator lives inside map generation), so the coordinate and walkability
+ * tables are built once and read for free from then on. Statics survive
+ * across turns within a fight, so `_ready` really does mean "already paid".
+ *
+ * Cost: ~35k operations, once. Everything after is array reads at 1 op.
+ */
+class Board {
+	static integer CELLS = 613
+
+	static Array<integer> px = []            // cell id -> x, always in [-17, 17]
+	static Array<integer> py = []            // cell id -> y
+	static Array<boolean> solid = []         // cell id -> obstacle (or off-map)
+	static Array<Array<integer>> nb = []     // cell id -> walkable orthogonal neighbours
+
+	static boolean _ready = false
+
+	static void init() {
+		if (Board._ready) return;
+		Board._ready = true
+
+		for (integer id = 0; id < Board.CELLS; id++) {
+			push(Board.px, getCellX(id) ?? 0)
+			push(Board.py, getCellY(id) ?? 0)
+			push(Board.solid, isObstacle(id) ?? true)
+		}
+
+		// Cell ids are laid out so that +18 is x+1 and +17 is y+1, but the
+		// board is a diamond, so the arithmetic wraps at the edges. Confirm
+		// each candidate really is the neighbour it claims to be.
+		for (integer id = 0; id < Board.CELLS; id++) {
+			Array<integer> out = []
+			Board._link(out, id, id + 18, 1, 0)
+			Board._link(out, id, id - 18, -1, 0)
+			Board._link(out, id, id + 17, 0, 1)
+			Board._link(out, id, id - 17, 0, -1)
+			push(Board.nb, out)
+		}
+	}
+
+	static void _link(Array<integer> out, integer from, integer to, integer dx, integer dy) {
+		if (to < 0 || to >= Board.CELLS) return;
+		if (Board.solid[to]) return;
+		if (Board.px[to] != Board.px[from] + dx) return;
+		if (Board.py[to] != Board.py[from] + dy) return;
+		push(out, to)
+	}
+
+	// Manhattan, exactly what the engine's getCellDistance computes, but from
+	// our own tables: 6 ops instead of 15, and it leaves dx/dy available.
+	static integer dist(integer a, integer b) {
+		return abs(Board.px[a] - Board.px[b]) + abs(Board.py[a] - Board.py[b])
+	}
+
+	/*
+	 * Mirror of Map.verifyRange's launch-type gate. The mask is inverted
+	 * logic: a bit that is NOT set forbids that family of offsets.
+	 *   bit 1 -> orthogonal lines allowed
+	 *   bit 2 -> pure diagonals allowed
+	 *   bit 4 -> everything else allowed
+	 * Casting on your own cell is always legal, checked before the mask.
+	 */
+	static boolean aimable(integer launch, integer from, integer to) {
+		if (from == to) return true
+		integer dx = Board.px[from] - Board.px[to]
+		integer dy = Board.py[from] - Board.py[to]
+		if ((launch & 1) == 0 && (dx == 0 || dy == 0)) return false
+		integer ax = abs(dx)
+		integer ay = abs(dy)
+		if ((launch & 2) == 0 && ax == ay) return false
+		if ((launch & 4) == 0 && ax != ay && dx != 0 && dy != 0) return false
+		return true
+	}
+
+	/*
+	 * Cells reachable on foot, cheapest-first.
+	 *
+	 * `order` comes out in BFS order, so the first cell in it that satisfies
+	 * a condition is also the cheapest one — that is what keeps MP in the
+	 * bank for the retreat.
+	 */
+	static Map<integer, integer> cost = [:]
+	static Array<integer> order = []
+
+	/*
+	 * Every cell an entity could stand on after spending `mp`, walls and
+	 * bodies respected. Returned rather than written into the shared walk
+	 * state, because this gets asked about OTHER entities while our own walk
+	 * result is still being read.
+	 */
+	static Array<integer> reach(integer start, integer mp, Map<integer, boolean> blocked) {
+		Array<integer> out = [start]
+		if (mp <= 0) return out
+
+		Map<integer, boolean> seen = [:]
+		seen[start] = true
+		Array<integer> frontier = [start]
+		for (integer step = 1; step <= mp; step++) {
+			Array<integer> next = []
+			for (integer cell in frontier) {
+				for (integer n in Board.nb[cell]) {
+					if (seen[n] != null) continue
+					if (blocked[n] != null) continue
+					seen[n] = true
+					push(out, n)
+					push(next, n)
+				}
+			}
+			if (count(next) == 0) break
+			frontier = next
+		}
+		return out
+	}
+
+	/*
+	 * Which of `cells` is closest to `to`, in range terms.
+	 *
+	 * Deliberately Manhattan, and deliberately not a flood: firing range in
+	 * this game is Manhattan whatever stands in between. A wall decides
+	 * whether a shot connects — a separate question, asked separately — but
+	 * never how far away the target counts as being.
+	 */
+	static integer closest(Array<integer> cells, integer to) {
+		integer best = -1
+		integer far = 999
+		for (integer c in cells) {
+			integer d = Board.dist(c, to)
+			if (d < far) {
+				far = d
+				best = c
+				if (far == 0) return c
+			}
+		}
+		return best
+	}
+
+	static void walk(integer start, integer mp, Map<integer, boolean> blocked) {
+		Board.cost = [:]
+		Board.order = []
+		Board.cost[start] = 0
+		push(Board.order, start)
+		if (mp <= 0) return;
+
+		Array<integer> frontier = [start]
+		for (integer step = 1; step <= mp; step++) {
+			Array<integer> next = []
+			for (integer cell in frontier) {
+				for (integer n in Board.nb[cell]) {
+					if (Board.cost[n] != null) continue
+					if (blocked[n] != null) continue
+					Board.cost[n] = step
+					push(Board.order, n)
+					push(next, n)
+				}
+			}
+			if (count(next) == 0) break
+			frontier = next
+		}
+	}
+}

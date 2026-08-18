@@ -1,0 +1,56 @@
+/*
+ * The turn.
+ *
+ *   1. generate every possible action
+ *   2. simulate its effects
+ *   3. score it
+ *   4. play them best-first until one lands
+ *   5. if something landed, start over — the board has changed
+ *   6. reposition
+ *
+ * Re-generating from scratch after every action is what removes the need for
+ * any lookahead: a kill, a spent cooldown or a fresh shield all show up in the
+ * next round's scores for free.
+ */
+class Brain {
+	// Stop searching well short of the ceiling. Everything after this point
+	// still has to move and fire, and blowing the budget forfeits the turn.
+	static real SAFETY = 0.70
+
+	static integer ROUNDS = 12       // hard stop; 10 TP cannot buy more
+	static integer TRIES = 8         // alternatives to try per round
+
+	static void play() {
+		Board.init()
+		Kit.init()
+
+		integer ceiling = (getMaxOperations() * Brain.SAFETY) as integer
+
+		for (integer round = 0; round < Brain.ROUNDS; round++) {
+			if (getOperations() > ceiling) break
+
+			State.refresh()
+			if (count(State.foes) == 0) break
+			if (State.tp <= 0) break
+			Sim.rebase()
+
+			Array<Shot> shots = Plan.generate()
+			if (count(shots) == 0) break
+
+			boolean acted = false
+			for (integer attempt = 0; attempt < Brain.TRIES; attempt++) {
+				Shot? pick = Plan.best(shots)
+				if (pick == null) break
+				pick.tried = true
+				if (Plan.fire(pick)) {
+					acted = true
+					break
+				}
+			}
+			if (!acted) break
+		}
+
+		State.refresh()
+		Field.reposition()
+	}
+}

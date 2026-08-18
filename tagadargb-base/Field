@@ -1,0 +1,164 @@
+/*
+ * Step 6: where to stand once there is nothing left to shoot.
+ *
+ * The plan called for a score field over the whole board with a preferred
+ * standoff band and an obstacle-shadow heuristic for cover. With 4 MP the
+ * reachable set is only ~40 cells, which is small enough to skip the
+ * heuristic entirely and ask the engine directly whether an enemy can see
+ * each candidate — the exact answer, for 31 operations a pair.
+ *
+ * Four terms:
+ *
+ *   POWER   how much of our kit can actually fire from here
+ *   COVER   a foe that could reach us cannot see us
+ *   THREAT  we are inside a foe's move-and-shoot envelope, in the open
+ *   ADVANCE the fallback when nothing anywhere can fire
+ *
+ * POWER is a sum, not a flag, and that distinction earns its keep: a cell at
+ * range 10 where only one long item reaches scores far below one at range 5
+ * where the short, heavy half of the kit comes online. Scored as a flag, the
+ * AI parks at maximum range and plinks with its cheapest weapon forever.
+ *
+ * The subtle part is that every item in this kit needs line of sight, and the
+ * engine's sight test is symmetric — so cover and a firing lane are the same
+ * lane. A hiding spot is therefore a real local optimum: stepping out of it
+ * gives up the cover bonus AND takes on the threat penalty, a cliff that no
+ * sane per-cell approach gradient outweighs. Hence `advance()`: when nothing
+ * on the whole reachable set can shoot, cover is worth nothing and closing the
+ * distance is the only move that changes the fight.
+ */
+class Field {
+	static real W_POWER = 14.0
+	static real W_COVER = 120.0
+	static real W_THREAT = 24.0
+	static real W_APPROACH = 40.0
+	static real W_ALLY = 6.0
+	static integer ALLY_SPAN = 8
+
+	static void reposition() {
+		if (State.mp <= 0) return;
+		if (count(State.foes) == 0) return;
+
+		Board.walk(State.cell, State.mp, State.blocked)
+
+		integer target = State.cell
+		real top = -1000000.0
+		boolean armed = false
+
+		for (integer cell in Board.order) {
+			real pw = Field.power(cell)
+			if (pw > 0) armed = true
+			real s = Field.score(cell, pw)
+			if (s > top) {
+				top = s
+				target = cell
+			}
+		}
+
+		if (!armed) {
+			Field.advance()
+			return;
+		}
+		if (target != State.cell) moveTowardCell(target, Board.cost[target] ?? State.mp)
+	}
+
+	static real score(integer cell, real pw) {
+		real total = Field.W_POWER * pw
+
+		// The more hurt we are, the more an enemy's envelope costs us. This is
+		// the only thing that makes the AI back off at low life.
+		real threat = Field.W_THREAT * (1.0 + 2.0 * (1.0 - State.lifeRatio()))
+
+		for (Ent foe in State.foes) {
+			integer d = Board.dist(cell, foe.cell)
+			// A foe that cannot reach us this coming turn is not worth reacting
+			// to; breaking sight from it is hiding from nothing.
+			if (d > foe.envelope) continue
+			if (lineOfSight(foe.cell, cell) ?? true) total -= threat * (foe.envelope - d + 1)
+			else total += Field.W_COVER
+		}
+
+		for (Ent friend in State.friends) {
+			if (friend.id == State.me) continue
+			integer d = Board.dist(cell, friend.cell)
+			if (d < Field.ALLY_SPAN) total += Field.W_ALLY * (Field.ALLY_SPAN - d)
+		}
+
+		return total
+	}
+
+	/*
+	 * Nothing in reach from anywhere we can walk: close the gap. Sitting safe
+	 * behind a wall we can never shoot past is exactly how a fight becomes a
+	 * 65-turn draw, so cover here is a tie-breaker among cells that all make
+	 * progress, never a reason to stand still.
+	 *
+	 * The last resort hands the move to the engine's own pathfinder. Manhattan
+	 * distance is obstacle blind, so in a pocket every reachable cell measures
+	 * no closer than the one we stand on and the AI re-picks its own cell
+	 * forever; escaping means walking around the wall, which looks like moving
+	 * backwards. moveToward costs 2500 operations and is only reached when the
+	 * turn had nothing better to do anyway.
+	 */
+	static void advance() {
+		Ent? nearest = null
+		integer here = 999
+		for (Ent foe in State.foes) {
+			integer d = Board.dist(State.cell, foe.cell)
+			if (d < here) {
+				here = d
+				nearest = foe
+			}
+		}
+		if (nearest == null) return;
+
+		// Among the cells that genuinely close the gap, take the one the fewest
+		// enemies can see. Walking up in the open hands them a free turn of
+		// shooting before we are close enough to answer.
+		integer target = -1
+		real top = -1000000.0
+		for (integer cell in Board.order) {
+			integer gap = 99
+			for (Ent foe in State.foes) {
+				integer d = Board.dist(cell, foe.cell)
+				if (d < gap) gap = d
+			}
+			if (gap >= here) continue
+
+			real s = -Field.W_APPROACH * gap
+			for (Ent foe in State.foes) {
+				if (!(lineOfSight(foe.cell, cell) ?? true)) s += Field.W_COVER
+			}
+			if (s > top) {
+				top = s
+				target = cell
+			}
+		}
+
+		if (target < 0) {
+			moveToward(nearest.id, State.mp)
+			return;
+		}
+		moveTowardCell(target, Board.cost[target] ?? State.mp)
+	}
+
+	/*
+	 * Damage per TP we could bring to bear from `cell` next turn, counting
+	 * each item once no matter how many enemies it covers. Ranges and geometry
+	 * only — TP and per-turn use counts will have reset by then.
+	 */
+	static real power(integer cell) {
+		real total = 0.0
+		for (Spec spec in Kit.guns) {
+			for (Ent foe in State.foes) {
+				integer d = Board.dist(cell, foe.cell)
+				if (d < spec.minRange || d > spec.maxRange) continue
+				if (!Board.aimable(spec.launch, cell, foe.cell)) continue
+				if (spec.needSight && !(lineOfSight(cell, foe.cell) ?? false)) continue
+				total += spec.punch
+				break
+			}
+		}
+		return total
+	}
+}
