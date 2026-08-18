@@ -38,9 +38,6 @@ from .fight_parser import (
     ACTION_LIFE_WIN,
     ACTION_DEATH,
     ACTION_SAY,
-    ACTION_DEBUG,
-    ACTION_DEBUG_W,
-    ACTION_DEBUG_E,
     ERROR_DESCRIPTIONS,
 )
 
@@ -76,8 +73,5 @@ __all__ = [
     "ACTION_LIFE_WIN",
     "ACTION_DEATH",
     "ACTION_SAY",
-    "ACTION_DEBUG",
-    "ACTION_DEBUG_W",
-    "ACTION_DEBUG_E",
     "ERROR_DESCRIPTIONS",
 ]

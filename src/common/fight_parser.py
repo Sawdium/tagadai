@@ -10,28 +10,44 @@ from the local Java generator (different action codes and data structure).
 from dataclasses import dataclass
 
 
-# Action type constants (from LeekWars API fight logs)
+# Action type constants, verified twice over: against the generator's own
+# Action.java, and against a real fight/get/{id} response.
+#
+# These were renumbered upstream. USE_WEAPON was 1, USE_CHIP was 2, SET_WEAPON
+# was 3 — Action.java still carries the old values commented out as
+# USE_WEAPON_OLD. The old numbers appear in no fight log any more, so a parser
+# holding them matches nothing and silently reports no weapon or chip use at
+# all. Several others moved too: death was 210 and is 5, and 302 used to mean
+# "remove effect" but now means "add chip effect", which is worse than a miss.
+#
+# Two payloads also changed shape. USE_WEAPON and USE_CHIP no longer name the
+# acting leek, and LEEK_TURN no longer carries TP/MP — the actor is whoever the
+# most recent LEEK_TURN named.
 ACTION_START_FIGHT = 0
-ACTION_USE_WEAPON = 1
-ACTION_USE_CHIP = 2
-ACTION_NEW_TURN = 6
-ACTION_LEEK_TURN = 7
+ACTION_DEATH = 5              # [5, leek_id]
+ACTION_NEW_TURN = 6           # [6, turn_number]
+ACTION_LEEK_TURN = 7          # [7, leek_id]
 ACTION_END_TURN = 8
-ACTION_MOVE_TO = 10
-ACTION_SET_WEAPON = 12
+ACTION_SUMMON = 9
+ACTION_MOVE_TO = 10           # [10, leek_id, dest_cell, [path]]
+ACTION_KILL = 11
+ACTION_USE_CHIP = 12          # [12, chip_id, cell, success]
+ACTION_SET_WEAPON = 13        # [13, weapon_id]
+ACTION_USE_WEAPON = 16        # [16, cell, success]
 ACTION_TP_LOST = 100
-ACTION_LIFE_LOST = 101
+ACTION_LIFE_LOST = 101        # [101, target_id, amount, erosion]
 ACTION_MP_LOST = 102
 ACTION_LIFE_WIN = 103
 ACTION_STRENGTH_WIN = 104
-ACTION_SUMMON = 200
-ACTION_SAY = 203
-ACTION_DEBUG = 204      # debug() output
-ACTION_DEBUG_W = 205    # debugW() warning output
-ACTION_DEBUG_E = 206    # debugE() error output
-ACTION_DEATH = 210
-ACTION_ADD_EFFECT = 301
-ACTION_REMOVE_EFFECT = 302
+ACTION_NOVA_DAMAGE = 107
+ACTION_LIFE_DAMAGE = 109
+ACTION_POISON_DAMAGE = 110
+ACTION_AFTEREFFECT = 111
+ACTION_SAY = 203              # [203, message]
+ACTION_SHOW_CELL = 205
+ACTION_ADD_WEAPON_EFFECT = 301
+ACTION_ADD_CHIP_EFFECT = 302
+ACTION_REMOVE_EFFECT = 303
 
 # Error action codes
 ACTION_ERROR_TOO_MANY_OPS = 1002  # AI interrupted: too many operations consumed
@@ -172,6 +188,13 @@ def parse_fight(result: dict, our_farmer_id: int, api_logs: dict = None) -> Figh
     turns = []
     current_turn_data = {"turn": 0, "events": []}
 
+    # USE_WEAPON and USE_CHIP no longer say who acted, so the actor has to be
+    # carried forward from the last LEEK_TURN. USE_WEAPON does not say what
+    # fired either, so the weapon in hand is tracked per leek across turns.
+    actor_id = None
+    actor_weapon = 0
+    held_weapon = {}
+
     # Track errors, messages, and debug output
     errors = []
     messages = []
@@ -189,42 +212,50 @@ def parse_fight(result: dict, our_farmer_id: int, api_logs: dict = None) -> Figh
             current_turn_data = {"turn": current_turn, "events": []}
 
         elif action_type == ACTION_LEEK_TURN:
+            # [7, leek_id]. TP/MP used to ride along here and no longer do;
+            # they are only observable now as PT_LOST/PM_LOST deltas.
             leek_id = action[1]
+            actor_id = leek_id
+            actor_weapon = held_weapon.get(leek_id, 0)
             leek = leeks.get(leek_id, {})
-            tp = action[2] if len(action) > 2 else 0
-            mp = action[3] if len(action) > 3 else 0
             current_turn_data["events"].append({
                 "type": "turn_start",
                 "leek": leek.get("name", f"#{leek_id}"),
                 "leek_id": leek_id,
                 "is_ours": leek_id in our_ids,
-                "tp": tp,
-                "mp": mp
             })
 
+        elif action_type == ACTION_SET_WEAPON:
+            # [13, weapon_id] by the current actor. Tracked because USE_WEAPON
+            # below reports only where the shot landed, never what fired it.
+            actor_weapon = action[1] if len(action) > 1 else 0
+            if actor_id is not None:
+                held_weapon[actor_id] = actor_weapon
+
         elif action_type == ACTION_USE_WEAPON:
-            leek_id = action[1]
-            weapon_id = action[3] if len(action) > 3 else 0
-            success = action[4] == 0 if len(action) > 4 else True
-            leek = leeks.get(leek_id, {})
+            # [16, cell, success] — no leek, no weapon. Both come from context.
+            success = bool(action[2]) if len(action) > 2 else True
+            leek = leeks.get(actor_id, {})
             current_turn_data["events"].append({
                 "type": "weapon",
-                "leek": leek.get("name", f"#{leek_id}"),
-                "is_ours": leek_id in our_ids,
-                "weapon_id": weapon_id,
+                "leek": leek.get("name", f"#{actor_id}"),
+                "is_ours": actor_id in our_ids,
+                "weapon_id": actor_weapon,
+                "cell": action[1] if len(action) > 1 else 0,
                 "success": success
             })
 
         elif action_type == ACTION_USE_CHIP:
-            leek_id = action[1]
-            chip_id = action[3] if len(action) > 3 else 0
-            success = action[4] == 0 if len(action) > 4 else True
-            leek = leeks.get(leek_id, {})
+            # [12, chip_id, cell, success] — the chip is named, the caster is not.
+            chip_id = action[1] if len(action) > 1 else 0
+            success = bool(action[3]) if len(action) > 3 else True
+            leek = leeks.get(actor_id, {})
             current_turn_data["events"].append({
                 "type": "chip",
-                "leek": leek.get("name", f"#{leek_id}"),
-                "is_ours": leek_id in our_ids,
+                "leek": leek.get("name", f"#{actor_id}"),
+                "is_ours": actor_id in our_ids,
                 "chip_id": chip_id,
+                "cell": action[2] if len(action) > 2 else 0,
                 "success": success
             })
 
@@ -286,11 +317,9 @@ def parse_fight(result: dict, our_farmer_id: int, api_logs: dict = None) -> Figh
             message = action[1] if len(action) > 1 else ""
             messages.append(message)
 
-        elif action_type in (ACTION_DEBUG, ACTION_DEBUG_W, ACTION_DEBUG_E):
-            # debug(), debugW(), debugE() output
-            level = {ACTION_DEBUG: "debug", ACTION_DEBUG_W: "warn", ACTION_DEBUG_E: "error"}.get(action_type, "debug")
-            message = action[1] if len(action) > 1 else ""
-            debug_output.append({"level": level, "message": message, "turn": current_turn})
+        # debug()/debugW()/debugE() do NOT appear in the action list. They are
+        # served separately and reach us through `api_logs`; the 204/205/206
+        # codes this used to watch for do not exist, and 205 is SHOW_CELL.
 
         elif action_type in ERROR_DESCRIPTIONS:
             # AI error occurred
