@@ -5,9 +5,40 @@ All project paths should be accessed through this module.
 """
 
 import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional
+
+# The generator is built with `sourceCompatibility = 25`, so its classes are
+# class-file version 69 and refuse to load on an older JVM.
+MIN_JAVA_VERSION = 25
+
+
+@lru_cache(maxsize=None)
+def java_version(java_bin: Path) -> int:
+    """
+    Feature version of a Java executable (e.g. 25), or 0 if it can't be read.
+
+    `java -version` writes to stderr and formats the version as "25.0.4" on
+    modern JDKs and "1.8.0_452" on Java 8, so the leading number is enough to
+    reject anything older than we need.
+    """
+    try:
+        proc = subprocess.run(
+            [str(java_bin), "-version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+
+    match = re.search(r'version "(\d+)', proc.stderr or proc.stdout)
+    return int(match.group(1)) if match else 0
 
 
 def get_project_root() -> Path:
@@ -59,9 +90,40 @@ class ProjectPaths:
         return self.generator_dir / "generator.jar"
 
     @property
-    def scenarios_dir(self) -> Path:
-        """RL scenarios directory."""
-        return self.root / "scenarios"
+    def toolchain_dir(self) -> Path:
+        """Downloaded build/run toolchain (JDK, Gradle) for the generator."""
+        return self.root / ".cache" / "toolchain"
+
+    @property
+    def java_bin(self) -> Optional[Path]:
+        """
+        Java executable able to run the generator (needs Java 25+).
+
+        Resolution order: TAGADAI_JAVA_HOME, the JDK unpacked under
+        .cache/toolchain, JAVA_HOME, then `java` on PATH. Returns None if
+        no candidate is new enough.
+        """
+        for candidate in self._java_candidates():
+            if candidate.exists() and java_version(candidate) >= MIN_JAVA_VERSION:
+                return candidate
+        return None
+
+    def _java_candidates(self):
+        override = os.getenv("TAGADAI_JAVA_HOME")
+        if override:
+            yield Path(override) / "bin" / "java"
+
+        # JDKs unpacked by scripts/setup_generator.sh, newest version first.
+        for jdk in sorted(self.toolchain_dir.glob("jdk-*"), reverse=True):
+            yield jdk / "bin" / "java"
+
+        java_home = os.getenv("JAVA_HOME")
+        if java_home:
+            yield Path(java_home) / "bin" / "java"
+
+        on_path = shutil.which("java")
+        if on_path:
+            yield Path(on_path)
 
     @classmethod
     def default(cls) -> "ProjectPaths":

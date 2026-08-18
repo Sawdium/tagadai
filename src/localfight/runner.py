@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from .scenario import Scenario
-from src.common.config import get_paths
+from src.common.config import MIN_JAVA_VERSION, get_paths
 
 # Path to the generator (uses centralized config)
 _paths = get_paths()
@@ -31,9 +31,31 @@ def get_generator_path() -> Path:
     if not GENERATOR_JAR.exists():
         raise RunnerError(
             f"Generator JAR not found at {GENERATOR_JAR}. "
-            "Run the setup first to build the generator."
+            "Run scripts/setup_generator.sh to build the generator."
         )
     return GENERATOR_JAR
+
+
+def get_java_path() -> Path:
+    """Get a Java executable new enough to run the generator."""
+    java = _paths.java_bin
+    if java is None:
+        raise RunnerError(
+            f"No Java {MIN_JAVA_VERSION}+ runtime found. The generator is built "
+            f"for Java {MIN_JAVA_VERSION} and will not load on an older JVM. "
+            "Run scripts/setup_generator.sh to install one, or point "
+            "TAGADAI_JAVA_HOME at an existing JDK."
+        )
+    return java
+
+
+def _build_command(scenario_path: Path, nocache: bool) -> list[str]:
+    """Build the generator command line for a scenario file."""
+    cmd = [str(get_java_path()), "-jar", str(get_generator_path())]
+    if nocache:
+        cmd.append("--nocache")
+    cmd.append(str(scenario_path))
+    return cmd
 
 
 def run_fight(
@@ -55,8 +77,6 @@ def run_fight(
     Raises:
         RunnerError: If the fight fails to execute
     """
-    jar_path = get_generator_path()
-
     # Write scenario to temp file
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False
@@ -65,11 +85,7 @@ def run_fight(
         scenario_path = Path(f.name)
 
     try:
-        # Build command
-        cmd = ["java", "-jar", str(jar_path)]
-        if nocache:
-            cmd.append("--nocache")
-        cmd.append(str(scenario_path))
+        cmd = _build_command(scenario_path, nocache)
 
         # Execute
         result = subprocess.run(
@@ -111,8 +127,6 @@ def run_fight_raw(
 
     Lower-level interface for when you already have JSON.
     """
-    jar_path = get_generator_path()
-
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False
     ) as f:
@@ -120,10 +134,7 @@ def run_fight_raw(
         scenario_path = Path(f.name)
 
     try:
-        cmd = ["java", "-jar", str(jar_path)]
-        if nocache:
-            cmd.append("--nocache")
-        cmd.append(str(scenario_path))
+        cmd = _build_command(scenario_path, nocache)
 
         result = subprocess.run(
             cmd,
@@ -146,13 +157,12 @@ def run_fight_raw(
 
 
 def check_generator() -> bool:
-    """Check if the generator is available and working."""
+    """Check if the generator is available and runnable on this machine."""
     try:
-        jar_path = get_generator_path()
-        result = subprocess.run(
-            ["java", "-jar", str(jar_path), "--help"],
+        subprocess.run(
+            [str(get_java_path()), "-jar", str(get_generator_path()), "--help"],
             capture_output=True,
-            timeout=10,
+            timeout=60,
             cwd=GENERATOR_DIR,
         )
         return True

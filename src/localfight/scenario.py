@@ -3,6 +3,11 @@ Scenario generation for local fights.
 
 Defines dataclasses for configuring fight scenarios and
 serializing them to the generator's JSON format.
+
+The generator only reads `random_seed`, `max_turns`, `farmers`, `teams` and
+`entities` from this JSON — `map` is serialized but ignored by
+`Scenario.fromFile()`, so every local fight runs on a randomly generated map.
+See src/localfight/README.md for the full generator contract.
 """
 
 from dataclasses import dataclass, field
@@ -11,7 +16,14 @@ import json
 import random
 
 
-# Item IDs for weapons (not weapon IDs!)
+# ITEM template ids, NOT the weapon ids that key data/weapons.json. The
+# generator registers each weapon under its `item` field
+# (`new Weapon(weapon.get("item")...)` in Generator.java), so `getWeapon(37)`
+# is the pistol (item 37 / weapon 1), not the odachi (weapon 37 / item 408).
+# These are the same ids the site API reports in `leek.weapons[].template`, so
+# a real build can be passed through unchanged. An id the generator doesn't
+# know is dropped with a stderr line nobody reads and the leek fights
+# bare-handed — validate before running.
 ITEM_PISTOL = 37
 ITEM_MACHINE_GUN = 38
 ITEM_SHOTGUN = 41
@@ -45,14 +57,18 @@ class LeekConfig:
     tp: int = 10
     mp: int = 3
 
-    # Resources (required for AI execution)
+    # Resources (required for AI execution). cores sets the per-turn operation
+    # budget (cores * 1_000_000) and ram the memory budget
+    # (min(50, ram) * 8_000_000). A real level-301 leek runs 18-19 cores; the
+    # default of 1 gives tagadalive 1M ops and it blows the limit on turn one.
     cores: int = 1
     ram: int = 6
 
-    # Position (requires map.id != 0)
+    # Starting cell. The generator places entities itself when this is None.
     cell: Optional[int] = None
 
-    # Equipment (use ITEM IDs, not weapon IDs!)
+    # Equipment: weapons are ITEM template ids (see the note above), chips are
+    # chip ids — which happen to equal their item template ids.
     weapons: list[int] = field(default_factory=lambda: [ITEM_PISTOL])
     chips: list[int] = field(default_factory=list)
 
@@ -91,9 +107,13 @@ class LeekConfig:
 
 @dataclass
 class MapConfig:
-    """Configuration for the fight map."""
+    """Configuration for the fight map.
 
-    # Must be non-zero to use custom cell positions
+    NOT APPLIED: `Scenario.fromFile()` never reads the `map` key, so the
+    generator always builds a random map. Kept because the field is part of
+    the server-side scenario format.
+    """
+
     id: int = 1
     width: int = 17
     height: int = 17

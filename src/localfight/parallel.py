@@ -2,7 +2,7 @@
 Parallel fight execution for faster data generation.
 
 Uses ThreadPoolExecutor to run multiple fights concurrently,
-maximizing CPU utilization for batch training scenarios.
+maximizing CPU utilization for batch scenarios.
 """
 
 import os

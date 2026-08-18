@@ -1,8 +1,12 @@
 """
-Local fight system for ML training.
+Offline fight execution via the LeekWars Java generator.
 
-Uses the LeekWars Java generator to run fights locally
-and collect training data for neural networks.
+Runs fights locally with no fight cost and no rate limit: smoke-testing
+tagadalive after a refactor, and bulk data generation.
+
+`python -m src.tools.localfight` is the CLI on top of this. The generator's
+quirks (weapon vs item ids, 0-based winner, op budget from `cores`, AI path
+resolution) are documented in src/localfight/README.md.
 """
 
 from .scenario import LeekConfig, Scenario, MapConfig, generate_scenarios

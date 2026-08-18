@@ -1,8 +1,7 @@
 """
 Output parser for fight results.
 
-Extracts structured data from generator output for analysis
-and ML training.
+Extracts structured data from raw generator output for analysis.
 """
 
 from dataclasses import dataclass, field
@@ -11,7 +10,18 @@ from typing import Optional
 
 
 class ActionType(IntEnum):
-    """Action types from the generator output."""
+    """
+    Action types from the generator output.
+
+    Source of truth: the generator's `action/Action.java`. These are the
+    generator's own IDs, which differ from the legacy IDs the website API
+    reports (there USE_WEAPON is 1 and USE_CHIP is 2).
+
+    Damage is NOT all reported as LIFE_LOST. The generator also emits
+    107 NOVA_DAMAGE, 108 DAMAGE_RETURN, 109 LIFE_DAMAGE, 110 POISON_DAMAGE and
+    111 AFTEREFFECT, none of which are parsed below — so a poison/magic build
+    currently comes out with damage_dealt = 0.
+    """
 
     START_FIGHT = 0
     DEATH = 5
@@ -19,9 +29,9 @@ class ActionType(IntEnum):
     LEEK_TURN = 7
     END_TURN = 8
     MOVE_TO = 10
+    USE_CHIP = 12
     SET_WEAPON = 13
     USE_WEAPON = 16
-    USE_CHIP = 17
     LIFE_LOST = 101
     LIFE_GAIN = 103
     SAY = 203
@@ -72,8 +82,9 @@ class TurnRecord:
 class FightResult:
     """Parsed result of a fight."""
 
-    # Outcome
-    winner: int  # 0=team1, 1=team2, -1=draw
+    # Outcome. This is the generator's 0-based TEAM INDEX, not the website
+    # API's 1-based team number: 0=team1, 1=team2, -1=draw, -2=all survivors.
+    winner: int
     duration: int  # Number of turns
 
     # Timing (nanoseconds)
