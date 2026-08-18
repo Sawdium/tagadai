@@ -32,8 +32,10 @@ python -m src.tools.fight --scenario 37772       # Test fight vs active opponent
 tagadai/
 ├── CLAUDE.md, docs/LEEKWARS_API.md
 ├── src/common/ (api.py, config.py, credentials.py, errors.py)
-├── src/tools/ (status, fight, aisync, testrunner, rl)
-├── src/{dashboard,scraper,ml,localfight,rl}/  # ML infrastructure
+├── src/tools/ (status, fight, aisync, testrunner, boss, loadout, editor, localfight)
+├── src/{scraper,localfight}/  # Fight data collection + local fight runner
+│                              # localfight/README.md = generator contract
+├── scripts/setup_generator.sh  # Builds the local fight generator into .cache/
 ├── leekwars_gardener/  # REFERENCE ONLY - never edit
 ├── tagadalive/         # ACTIVE AI - LeekScript v4
 │   ├── AI/ (AI, Algorithms/{PTS,MCTS,BeamSearch,UnifiedMCTS,Hybrid}, Scoring, ScoringConfig)
@@ -101,17 +103,45 @@ python -m src.tools.loadout apply <leek> <loadout>          # Equip loadout (gea
 python -m src.tools.loadout apply <leek> <loadout> --restat # Equip + reallocate stats (uses a restat potion)
 python -m src.tools.loadout --account <login> <cmd>         # Switch account
 
-# RL
-python -m src.tools.rl duel [--seed 42]
-python -m src.tools.rl scenario <yaml> -w 4
-
 # Editor Problems (headless browser — reads compiler warnings/errors/TODOs)
 python -m src.tools.editor                          # All problems, grouped by file
 python -m src.tools.editor Model/GameObject/Entity  # Only one AI file's problems
 python -m src.tools.editor --json                   # Machine-readable
 python -m src.tools.editor --account tagadanar      # Switch account
 python -m src.tools.editor --headed                 # Show the browser (debug)
+
+# Local Fight Runner (offline fights via the LeekWars Java generator)
+scripts/setup_generator.sh                          # Set up / update the generator (first run)
+scripts/setup_generator.sh --force                  # Force a JAR rebuild
+python -m src.tools.localfight                      # tagadalive vs itself, first two leeks
+python -m src.tools.localfight Claudius Claudias    # pick leeks by name or id
+python -m src.tools.localfight --seed 42            # reproducible fight
+python -m src.tools.localfight --ai tagadalive/testMain  # run another entry point
+python -m src.tools.localfight --logs               # dump AI debug output
+python -m src.tools.localfight --json               # raw generator output
 ```
+
+> **Note**: `localfight` pulls each leek's LIVE build (stats, weapons, chips)
+> from the API and runs it through the local generator — free, offline,
+> unlimited, and it exits 1 when the AI logged errors. It symlinks `tagadalive/`
+> into the generator dir, because the generator roots every AI path at its own
+> working directory and rejects anything escaping it.
+>
+> Three gotchas that bite every time, documented in full in
+> [src/localfight/README.md](src/localfight/README.md#generator-contract):
+> - **`winner` is a 0-based TEAM INDEX** (-1 draw, -2 all survivors), unlike the
+>   website API's 1-based team number. Report `leeks[].id` is renumbered 0,1,2…
+> - **`weapons` take ITEM template ids**, not the weapon ids in
+>   `data/weapons.json` keys — the generator registers weapons under their
+>   `item` field. A wrong id is silent: the leek just fights bare-handed.
+> - **`cores` sets the op budget** (`cores × 1M`). Leave it at the `LeekConfig`
+>   default of 1 and the AI blows the limit on turn one.
+
+> **Note**: `src/localfight/` needs **Java 25** — the generator is compiled for
+> it and will not load on an older JVM. `setup_generator.sh` downloads a private
+> JDK 25 + Gradle 9 into `.cache/toolchain/` (no sudo, nothing system-wide), then
+> builds `.cache/leek-wars-generator/generator.jar`. Set `TAGADAI_JAVA_HOME` to
+> reuse an existing JDK 25+. Re-run the script to pick up upstream changes.
 
 > **Note**: `editor` is the only way to read LeekScript compiler warnings (e.g.
 > "comparison always false", "unnecessary non-null assertion") — the AI
@@ -397,27 +427,57 @@ Key endpoints:
 
 ## Reference: Fight Result Structure
 
-Fight results from `/fight/get/{id}`:
+`GET /fight/get/{id}` returns a wrapper. The replay lives under **`data`** — not
+at the top level, and not in `report`, which is only the end-of-fight summary
+(duration, win, bonus):
+
 ```json
-{"winner": 1, "fight": 12345, "map": {}, "leeks": [], "team1": [1,2], "team2": [3,4], "actions": [], "report": {}}
+{"id": 53229131, "status": 2, "winner": 1, "report": {"duration": 8, "win": true},
+ "data": {"leeks": [], "map": {}, "actions": [], "dead": {}, "ops": {}}}
 ```
 Winner: -1=pending, 0=draw, 1=team1, 2=team2.
 
 ### Action Types
 
+**These were renumbered upstream.** `USE_WEAPON` was 1, `USE_CHIP` was 2,
+`SET_WEAPON` was 3, death was 210 — the generator's `Action.java` still carries
+the old values commented out as `USE_WEAPON_OLD`. The old numbers appear in no
+fight log any more, so code holding them matches nothing and silently reports no
+weapon or chip use at all. Worse than a miss: 302 used to mean "remove effect"
+and now means "add chip effect". Verified against both `Action.java` and a live
+`/fight/get` response.
+
+**Two payloads carry less than they used to.** `USE_WEAPON`/`USE_CHIP` no longer
+name the acting leek, and `LEEK_TURN` no longer carries TP/MP. The actor is
+whoever the most recent `LEEK_TURN` named, and the weapon that fired is whatever
+the last `SET_WEAPON` selected — both have to be tracked while walking the list.
+
 | ID | Action | Format | Description |
 |----|--------|--------|-------------|
 | 0 | START_FIGHT | `[0, team2_size, team1_size]` | Battle begins |
-| 1 | USE_WEAPON | `[1, leek_id, cell, weapon_id, fail, [targets]]` | Weapon attack (fail: 0=hit, 1=miss) |
-| 2 | USE_CHIP | `[2, leek_id, cell, chip_id, fail, [targets]]` | Chip/spell use |
+| 5 | PLAYER_DEAD | `[5, leek_id]` | Entity died |
 | 6 | NEW_TURN | `[6, turn_number]` | New round starts |
-| 7 | LEEK_TURN | `[7, leek_id, TP, MP]` | Leek's turn begins |
+| 7 | LEEK_TURN | `[7, leek_id]` | Leek's turn begins — **no TP/MP** |
+| 8 | END_TURN | `[8, leek_id]` | Leek's turn ends |
+| 9 | SUMMON | | Bulb summoned |
 | 10 | MOVE_TO | `[10, leek_id, dest_cell, [path]]` | Movement |
+| 11 | KILL | | Kill credited |
+| 12 | USE_CHIP | `[12, chip_id, cell, success]` | Chip use — **caster implied** |
+| 13 | SET_WEAPON | `[13, weapon_id]` | Weapon selected by the current actor |
+| 16 | USE_WEAPON | `[16, cell, success]` | Attack — **no leek id, no weapon id** |
 | 100 | PT_LOST | `[100, leek_id, amount]` | Action points spent |
-| 101 | LIFE_LOST | `[101, leek_id, damage]` | Damage taken |
+| 101 | LIFE_LOST | `[101, leek_id, amount, erosion]` | Damage taken |
 | 102 | PM_LOST | `[102, leek_id, amount]` | Movement points spent |
 | 103 | LIFE_WIN | `[103, leek_id, amount]` | Health restored |
-| 301 | ADD_EFFECT | `[301, weapon, effect_id, src, tgt, type, val, dur]` | Status effect applied |
+| 107/109/110/111 | NOVA / LIFE / POISON / AFTEREFFECT damage | `[id, leek_id, amount, erosion]` | Damage by family |
+| 203 | SAY | `[203, message]` | `say()` output |
+| 205 | SHOW_CELL | | `mark()` / cell highlight |
+| 301 / 302 | ADD_WEAPON_EFFECT / ADD_CHIP_EFFECT | | Status effect applied |
+| 303 | REMOVE_EFFECT | | Status effect expired |
+| 1000 / 1002 | ERROR / AI_ERROR | | AI crash or op-limit interrupt |
+
+`debug()`/`debugW()`/`debugE()` output is **not** in the action list — fetch it
+with `?logs=true` or `/fight/get-logs/{id}`.
 
 ---
 
@@ -446,7 +506,7 @@ Return codes: `USE_SUCCESS`, `USE_FAILED`, `USE_NOT_ENOUGH_TP`, `USE_INVALID_TAR
 
 ## Strategy & Roadmap
 
-Iterative improvement loop: baseline → fight → analyze → identify patterns → modify AI → validate → repeat. Completed: fight DB, dashboard, ML pipeline, local runner. Remaining: full API client, fight launcher, AI code generator, learning loop orchestrator.
+Iterative improvement loop: baseline → fight → analyze → identify patterns → modify AI → validate → repeat. Completed: fight DB, local fight runner, API/CLI tooling. Remaining: new dashboard (to be rebuilt from scratch), learning loop orchestrator.
 
 ## Key Resources
 

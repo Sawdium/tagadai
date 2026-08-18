@@ -26,6 +26,7 @@ Each section below and each method in `src/common/api.py` carries a tag:
 
 Authentication / farmer:
 - `POST /farmer/login-token` · `GET /farmer/get-from-token` · `GET /farmer/get/{id}`
+- `POST /farmer/set-avatar` (multipart, field `avatar`) — served from `/avatar/{farmer_id}.png`
 
 Garden / fight:
 - `GET /garden/get` · `GET /garden/get-leek-opponents/{id}` · `GET /garden/get-farmer-opponents`
@@ -49,6 +50,11 @@ Test scenarios / test leeks:
 
 Leek:
 - `GET /leek/get/{id}` — full leek data incl. equipment and characteristic values
+- `POST /leek/set-ai` (body `{leek_id, ai_path}` — **`ai_path`**, not `ai_id`)
+
+Static tables (no auth):
+- `GET /item/get-all` · `GET /weapon/get-all` · `GET /chip/get-all` — weapon
+  **item template ids ≠ weapon ids**; see the Leek section for the mapping.
 
 Loadouts (équipements — native build presets; see `src/tools/loadout.py`):
 - `GET /loadout/get-all` → `{loadouts:[{id,name,icon,weapons[],forgotten_weapons[],chips[],components[],stats{},order}], owned_weapons[], owned_chips[]}`
@@ -67,7 +73,6 @@ All **team / ranking / chat / forum / message / tournament / trophy / moderation
 ### Suspect (live code disagrees with historical doc)
 
 - `POST /market/buy-habs` (historical) vs `POST /market/buy-habs-quantity` (`api.py`) — at least one is stale.
-- `POST /leek/set-ai` — body has `ai_id` per pre-2026 doc; since AI is now path-keyed and `POST /ai/test-scenario` accepts paths via `ai_id`, this probably also takes a path. Not probed.
 
 ### Known-gone (returned `no_such_service` during probing)
 
@@ -125,7 +130,7 @@ POST /farmer/update
 ```
 Probing this with GET returned `service_not_implemented`. Method/shape unverified.
 
-### Set Avatar (Upload Profile Picture)
+### Set Avatar (Upload Profile Picture) — [VERIFIED]
 ```
 POST /farmer/set-avatar
 Content-Type: multipart/form-data
@@ -135,6 +140,11 @@ Response: {"avatar_changed": timestamp}
 Accepted formats: PNG, JPEG, JPG, BMP, GIF, WEBP
 Max size: 10 MB
 ```
+The avatar is then served from **`https://leekwars.com/avatar/{farmer_id}.png`** (append `?{avatar_changed}` to
+bust the cache). `/static/avatar/{id}.png` 404s — it is not the serve path. The same `avatar_changed` timestamp
+also comes back on the farmer object from `GET /farmer/get-from-token`.
+
+> The server re-crops the upload slightly tighter than what you send, so leave a little margin around the subject.
 
 ### Set Language
 ```
@@ -220,6 +230,32 @@ POST /farmer/login-comeback
 ```
 GET /leek/get/{leek_id}
 ```
+Characteristics come back as `total_*` (`total_life`, `total_strength`,
+`total_cores`, `total_ram`, `total_tp`, `total_mp`, …) — those include gear and
+components, and are the numbers the fight engine actually uses. `weapons` and
+`chips` are lists of `{template, id}`, where `template` is the **item template
+id** and `id` is that specific copy in the inventory. `ai_path` here is null;
+the leek→AI mapping lives in `farmer.ai_tree.leek_ais`.
+
+### Item / weapon / chip tables — [VERIFIED]
+```
+GET /item/get-all        # {template_id: {id, name, type, params, ...}}
+GET /weapon/get-all      # {"weapons": {weapon_id: {..., item: template_id}}}
+GET /chip/get-all        # {"chips": {chip_id: {...}}}
+```
+No auth needed. `type` 1 = weapon, 2 = chip.
+
+**Ids do not line up between the three tables, and this causes silent bugs:**
+
+- A weapon has *two* ids: the **item template id** the leek carries
+  (`weapon_pistol` = 37) and the **weapon id** in `/weapon/get-all`
+  (pistol = 1). `item.params` maps template → weapon id, and
+  `weapon.item` maps back. Weapon 37 is the *odachi*, so mixing them up
+  silently produces a valid-but-wrong weapon.
+- A chip has only one: template id == chip id (verified for all 109). No
+  translation needed.
+- Local fight scenarios take **item template ids for weapons** — see
+  [src/localfight/README.md](../src/localfight/README.md#weapon-ids-are-item-ids-chip-ids-are-not).
 
 ### Get Leek Count — [UNVERIFIED]
 ```
@@ -231,12 +267,19 @@ GET /leek/get-count
 GET /leek/get-level-popup/{leek_id}
 ```
 
-### Set Leek AI — [SUSPECT]
+### Set Leek AI — [VERIFIED]
 ```
 POST /leek/set-ai
-Body: {"leek_id": id, "ai_id": id}
+Body: {"leek_id": id, "ai_path": "path/to/ai"}
+Response: []
 ```
-The `ai_id` field name is inherited from the pre-migration API. Since AI files are now path-keyed, this body most likely now expects `{"leek_id": id, "ai": "path/to/ai"}` — or maybe `ai_id` still accepts a path string (as `POST /ai/test-scenario` does). Not probed.
+The parameter is **`ai_path`** — not the pre-2026 `ai_id`, and not `ai`. Both of those (and `path`) return
+`400 {"error":"missing_parameter","parameter":"ai_path","module":"leek","function":"set-ai"}`. Note that
+`POST /ai/test-scenario` still uses `ai_id` for the same kind of path string, so the two are inconsistent.
+
+> **Gotcha**: after a successful write, `get_leek_ai_paths()` on the *same* session still reports the old path —
+> `farmer.ai_tree` comes from the login response and is not refreshed. Re-login (e.g. `python -m src.tools.status`)
+> to confirm the change landed.
 
 ### Set Leek Hat — [UNVERIFIED]
 ```
