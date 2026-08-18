@@ -46,21 +46,6 @@ class ProjectPaths:
         return self.data_dir / "fights.db"
 
     @property
-    def models_dir(self) -> Path:
-        """ML models directory."""
-        return self.data_dir / "models"
-
-    @property
-    def checkpoints_dir(self) -> Path:
-        """Training checkpoints directory."""
-        return self.root / "models" / "checkpoints"
-
-    @property
-    def static_dir(self) -> Path:
-        """Dashboard static files."""
-        return self.root / "src" / "dashboard" / "static"
-
-    @property
     def generator_dir(self) -> Path:
         """Local fight generator directory."""
         override = os.getenv("TAGADAI_GENERATOR_DIR")

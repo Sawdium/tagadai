@@ -1,6 +1,0 @@
-// Auto-include for TagadaNN
-// Includes all necessary modules
-
-include('NN/Weights')
-include('NN/Forward')
-include('NN/Features')
