@@ -466,10 +466,11 @@ the last `SET_WEAPON` selected — both have to be tracked while walking the lis
 | 13 | SET_WEAPON | `[13, weapon_id]` | Weapon selected by the current actor |
 | 16 | USE_WEAPON | `[16, cell, success]` | Attack — **no leek id, no weapon id** |
 | 100 | PT_LOST | `[100, leek_id, amount]` | Action points spent |
-| 101 | LIFE_LOST | `[101, leek_id, amount, erosion]` | Damage taken |
+| 101 | LIFE_LOST | `[101, leek_id, amount, erosion]` | Direct damage taken. Only one of five damage codes — see 107-110 |
 | 102 | PM_LOST | `[102, leek_id, amount]` | Movement points spent |
 | 103 | LIFE_WIN | `[103, leek_id, amount]` | Health restored |
-| 107/109/110/111 | NOVA / LIFE / POISON / AFTEREFFECT damage | `[id, leek_id, amount, erosion]` | Damage by family |
+| 107 / 108 / 109 / 110 | NOVA / DAMAGE_RETURN / LIFE / POISON damage | `[id, leek_id, amount, erosion]` | Damage by family. `leek_id` is the **victim**, not the attacker |
+| ~~111~~ | — | | Present in `Action.java`, never emitted. `DamageType.AFTEREFFECT` maps to **110**, not 111 |
 | 203 | SAY | `[203, message]` | `say()` output |
 | 205 | SHOW_CELL | | `mark()` / cell highlight |
 | 301 / 302 | ADD_WEAPON_EFFECT / ADD_CHIP_EFFECT | | Status effect applied |

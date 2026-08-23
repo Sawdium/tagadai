@@ -33,6 +33,15 @@ Garden / fight:
 - `POST /garden/start-solo-fight` (body `{leek_id, target_id}`) · `POST /garden/start-farmer-fight` (body `{target_id}`)
 - `GET /fight/get/{id}` · `GET /fight/get-logs/{id}`
 
+**Undocumented but present** (verified against a live response, 2026-08-23):
+
+- `GET /fight/get/{id}` returns a **top-level `seed`** field — the RNG seed the
+  server used. Feeding it to the local generator reproduces the map geometry,
+  entity placement and the opening action sequence exactly.
+- `POST /history/get-leek-history/{id}` returns a leek's **full** fight history.
+  The `fight_history` embedded in the login response and
+  `GET /history/get-farmer-history/{id}` both cap at the last 6 fights.
+
 AI files (path-based):
 - `POST /ai/read` · `POST /ai/write` · `POST /ai/create`
 - `POST /ai/rename` · `POST /ai/move`
