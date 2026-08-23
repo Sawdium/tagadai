@@ -1,873 +1,256 @@
 # Algorithmes de Recherche de Combos - TagadAI
 
-Ce document décrit en détail les algorithmes de recherche de combos implémentés dans l'IA LeekWars.
+Ce document décrit les algorithmes de recherche de combos implémentés dans l'IA LeekWars.
+
+> **Ce fichier a été réécrit le 2026-08-23** : la version précédente documentait une
+> génération antérieure de l'IA (PTS, UnifiedMCTS, modes Hybrid/HybridGuided/HybridBeam)
+> qui n'existe plus dans le code. Voir `AI/AI` et `AI/Algorithms/` pour l'état réel.
 
 ## Table des matières
 
 1. [Vue d'ensemble](#vue-densemble)
-2. [Architecture commune](#architecture-commune)
-3. [Algorithmes de base](#algorithmes-de-base)
-   - [PTS - Priority Target Simulation](#pts---priority-target-simulation)
-   - [MCTS - Monte Carlo Tree Search](#mcts---monte-carlo-tree-search)
-   - [BeamSearch - Recherche en faisceau](#beamsearch---recherche-en-faisceau)
-   - [UnifiedMCTS - MCTS unifié](#unifiedmcts---mcts-unifié)
-4. [Modes hybrides](#modes-hybrides)
-   - [HYBRID](#hybrid)
-   - [HYBRID_GUIDED](#hybrid_guided)
-   - [HYBRID_BEAM](#hybrid_beam)
-5. [Comparaison détaillée](#comparaison-détaillée)
-6. [Guide de choix](#guide-de-choix)
-7. [Exemples concrets](#exemples-concrets)
-8. [Tuning et configuration](#tuning-et-configuration)
+2. [Fait architectural clé : pas de lookahead](#fait-architectural-clé--pas-de-lookahead)
+3. [ComboExplorer (mode par défaut)](#comboexplorer-mode-par-défaut)
+4. [ActionKnapsack](#actionknapsack)
+5. [ComboBuilder et Combo.add](#combobuilder-et-comboadd)
+6. [MCTS](#mcts)
+7. [BeamSearch](#beamsearch)
+8. [Scoring et coefficients figés](#scoring-et-coefficients-figés)
+9. [Changer de mode](#changer-de-mode)
 
 ---
 
 ## Vue d'ensemble
 
-L'IA dispose de **7 modes** de recherche de combos, configurables via `AI.mode` :
+`AI.mode` (dans `AI/AI`) n'a que **trois** constantes :
 
-| Mode | Constante | Description courte |
-|------|-----------|-------------------|
-| PTS | `MODE_PTS = 0` | Greedy target-first, très rapide |
-| MCTS | `MODE_MCTS = 1` | Arbre de recherche avec UCB1 |
-| BEAM | `MODE_BEAM = 2` | Faisceau de candidats, multi-path |
-| HYBRID | `MODE_HYBRID = 3` | PTS seed → MCTS sur 1 cellule |
-| HYBRID_GUIDED | `MODE_HYBRID_GUIDED = 4` | PTS guide l'ordre des cellules MCTS |
-| HYBRID_BEAM | `MODE_HYBRID_BEAM = 5` | PTS guide l'ordre des cellules Beam |
-| UNIFIED_MCTS | `MODE_UNIFIED_MCTS = 6` | Arbre unique avec cellules au premier niveau |
+| Mode | Constante | Fichier | Rôle |
+|------|-----------|---------|------|
+| Combo Explorer | `MODE_COMBO_EXPLORER = 9` | `AI/Algorithms/ComboExplorer` | Exploration multi-phase, **mode par défaut**, utilisé par `main` |
+| MCTS | `MODE_MCTS = 1` | `AI/Algorithms/MCTS` | Arbre de recherche UCB1, existe toujours mais n'est pas le chemin actif |
+| Beam Search | `MODE_BEAM = 2` | `AI/Algorithms/BeamSearch` | Faisceau de candidats, existe toujours mais n'est pas le chemin actif |
 
-**Mode par défaut** : `UNIFIED_MCTS` (arbre unifié, UCB1 alloue naturellement les itérations)
+`tagadalive/main` fixe `AI.mode = AI.MODE_COMBO_EXPLORER`. Il n'existe plus de PTS, plus
+d'UnifiedMCTS, et aucun mode hybride (`Hybrid` est un fichier présent dans
+`AI/Algorithms/` mais aucune constante `MODE_HYBRID*` ne le sélectionne — vérifier son
+statut réel avant de s'y fier, ce document n'a pas audité son contenu).
 
----
-
-## Architecture commune
-
-Tous les algorithmes partagent la même infrastructure :
-
-### Structures de données
-
-```
-Combo
-├── actions: Array<Action>      // Séquence d'actions ordonnées
-├── finalPosition: Position     // Position de fin de tour
-└── score: real                 // Score total (actions + position)
-
-Action
-├── item: Item                  // Arme ou chip utilisé
-├── from: Cell                  // Cellule d'attaque (ou Fight.selfCell pour self-cast)
-├── to: Cell                    // Cellule cible
-├── consequences: Consequences  // État après l'action
-└── score: real                 // Score de cette action
-
-Consequences
-├── currentCell: Cell           // Position après action
-├── currentTP/MP: integer       // Ressources restantes
-├── _alterations: Map           // Buffs/debuffs appliqués
-├── _killed: Map                // Entités tuées
-└── score: real                 // Score cumulé des effets
-```
-
-### Flux d'exécution commun
-
-```
-1. MapAction.getMapBestAction()     // Pré-calcul des meilleures actions par (cell, item)
-2. Pour chaque cellule atteignable :
-   │
-   ├── Récupérer les actions disponibles
-   ├── Fusionner les actions self-cast
-   ├── [ALGORITHME SPÉCIFIQUE]      // PTS, MCTS, ou BeamSearch
-   └── Garder le meilleur combo
-   │
-3. Ajouter la position finale (MapPosition.findBestPosition)
-4. Retourner le combo avec le meilleur score
-```
-
-### Chaînage des conséquences
-
-Le **chaînage des conséquences** est crucial : chaque action est évaluée en tenant compte de l'état résultant des actions précédentes.
-
-```
-Action 1 (buff STR +100)
-    ↓ consequences: STR augmentée
-Action 2 (attaque)
-    ↓ bénéficie du buff → dégâts augmentés → meilleur score
-```
-
-Sans chaînage, l'action 2 serait évaluée sans le buff, donnant un score incorrect.
+`AI/Algorithms/` contient aussi `ActionKnapsack`, `BulbGreedy` et `ComboBuilder`, qui ne
+sont pas des modes sélectionnables via `AI.mode` mais des briques utilisées par
+`ComboExplorer`.
 
 ---
 
-## Algorithmes de base
+## Fait architectural clé : pas de lookahead
 
-### PTS - Priority Target Simulation
+**Aucun algorithme ne simule au-delà du tour courant.** Il n'y a pas de recherche
+multi-tours, pas d'arbre de jeu qui projette le tour adverse, pas de rollout qui
+regarde plusieurs tours en avant. Le "futur" est représenté uniquement à l'intérieur
+de l'évaluation d'un combo à un seul tour, via :
 
-**Fichier** : `AI/PTS`
+- `turnsLeft` et les tables de `durationMitigation` (combien de tours un effet/buff
+  compte vraiment avant la fin probable du combat),
+- `getEffectiveDuration` (durée effective d'un effet, pondérée par ces tables),
+- des modificateurs liés à l'ordre de jeu (qui joue avant qui),
+- les cartes de danger/menace dans `Controlers/Maps/` : `MapDanger`, `MapCellScore`,
+  `MapAction` (et les autres : `MapDamage`, `MapPath`, `MapPosition`, `MapSummon`,
+  `MapSupport`, `MapTactical`).
 
-#### Principe
-
-PTS itère **cible par cible** au lieu de cellule par cellule. Pour chaque paire (cible, item), il génère une "Opportunity" avec toutes les cellules d'attaque valides.
-
-#### Algorithme
-
-```
-1. GÉNÉRATION DES OPPORTUNITÉS
-   Pour chaque item (non en cooldown) :
-     Pour chaque cible (ennemis, alliés, soi) :
-       Si cible invincible et ennemie : skip
-       Calculer les cellules d'attaque valides
-       Créer Opportunity(cible, item, cellules, baseScore)
-
-2. TRI
-   - Self-cast en premier (buffs/heals prioritaires)
-   - Puis par score décroissant
-
-3. CONSTRUCTION GREEDY
-   Pour chaque opportunité triée :
-     Si exécutable (TP, CD, cible vivante, cellule atteignable) :
-       Créer action chaînée
-       Si score > 0 : ajouter au combo
-       Mettre à jour état (TP, MP, position, usages)
-
-4. POSITIONNEMENT FINAL
-   Trouver meilleure position de fin de tour
-```
-
-#### Complexité
-
-- **Temps** : O(items × cibles) pour la génération, O(opportunités) pour la construction
-- **Espace** : O(opportunités) - pas de structure arborescente
-
-#### Avantages
-
-| Avantage | Explication |
-|----------|-------------|
-| **Très rapide** | Single-pass greedy, pas d'exploration |
-| **Faible consommation ops** | Économique en opérations |
-| **Prévisible** | Déterministe, même résultat à chaque fois |
-| **Scale avec cibles** | O(cibles) au lieu de O(cellules) |
-
-#### Inconvénients
-
-| Inconvénient | Explication |
-|--------------|-------------|
-| **Myope** | Choisit le meilleur local, peut rater des synergies |
-| **Ordre figé** | L'ordre de tri détermine tout |
-| **Pas d'exploration** | Ne teste pas d'ordres alternatifs |
-
-#### Exemple
-
-```
-Opportunités générées :
-  1. Cure sur soi (score: 500)      ← self-cast, prioritaire
-  2. Laser sur Ennemi1 (score: 450)
-  3. Pistol sur Ennemi2 (score: 300)
-  4. Shield sur soi (score: 200)    ← self-cast, prioritaire
-
-Après tri :
-  1. Cure (self-cast)
-  2. Shield (self-cast)
-  3. Laser
-  4. Pistol
-
-Construction :
-  - Cure → OK, ajouté (TP: 10→7)
-  - Shield → OK, ajouté (TP: 7→5)
-  - Laser → OK, ajouté (TP: 5→2)
-  - Pistol → Pas assez de TP, skip
-
-Combo final : Cure → Shield → Laser → Move(cell:245)
-```
+C'est le fait le plus important pour comprendre l'architecture actuelle : la qualité
+du jeu vient de la richesse de l'évaluation à un tour, pas d'une recherche en
+profondeur sur plusieurs tours.
 
 ---
 
-### MCTS - Monte Carlo Tree Search
+## ComboExplorer (mode par défaut)
 
-**Fichier** : `AI/MCTS`
+**Fichier** : `AI/Algorithms/ComboExplorer`. Point d'entrée : `ComboExplorer.explore()`.
 
-#### Principe
+### Principe
 
-MCTS construit un arbre de recherche où chaque nœud représente un état après une séquence d'actions. L'algorithme **UCB1** équilibre exploration (essayer de nouvelles actions) et exploitation (approfondir les meilleures).
+Ce n'est ni un greedy single-pass ni un arbre de recherche : c'est un **ordonnancement
+fixe de phases**, chacune explorant une famille de combos différente. Chaque phase
+appelle `ctx.shouldStop()` avant de s'exécuter ; dès que le budget d'opérations restant
+passe sous la réserve (`ExplorerConfig.OPERATION_BUFFER_*`), les phases suivantes sont
+sautées. La phase 0 (Stay) tourne toujours en premier et garantit un résultat même si
+tout le reste est coupé.
 
-#### Algorithme
+### Ordre réel des phases (lu dans `explore()`)
 
-```
-1. INITIALISATION
-   Créer nœud racine (état initial)
-   Pré-calculer actions prunées (top-K par score)
+| Phase | Nom interne | Fonction | Description (lue dans le code) |
+|-------|-------------|----------|----------------------------------|
+| 0 | Stay | `phaseStay` | Reste sur place — base bon marché, 0 MP offensif, tourne toujours |
+| SAFE | Safe | `phaseConstrainedEnd(..., "SAFE")` | Maximise les dégâts en forçant la position finale sur la cellule la plus sûre (`MapPosition.findBestPositionFromMap`) ; tourne toujours |
+| T | Target Focus | `phaseTargetFocus` | Par ennemi non-bulbe vivant : énumération de préfixes (Libération × buffs Force × Neutrino × niveaux de MP) ; par allié pouvant mourir : 2 variantes de buff MP |
+| I | Inversion | `phaseInversion` | Stratégies utilisant l'inversion (chip Inversion) |
+| R | Repotting | `phaseRepotting` | Échange de position avec un bulbe allié (rempotage) |
+| A | Attract | `phaseAttract` | Attraction simple (grappin seul) |
+| P | Push | `phasePush` | Poussée simple (gant de boxe seul) |
+| AP | Attract-Push | `phaseAttractPush` | Combos attraction + poussée (grappin + gant de boxe) |
+| PIP | Pull-Inversion-Push | `phasePullInvPush` | Combos tirer-inverser-pousser (grappin + inversion + gant de boxe) |
+| 1 | Single-cell | `phaseSingleCell` | Échantillonnage MP sur une seule cellule (1a : portée courante sans buff, 1b : portée étendue avec buffs MP minimaux, 1c : cellules atteignables via saut/téléportation) |
+| 2 | Multi-cell pairs | `phaseMultiCell` | Paires de cellules parmi les top-K les plus intéressantes (`INTERESTING_CELLS_K_PHASE2 = 15`), les deux ordres, buffs MP minimaux si nécessaire |
+| 3 | Three-cell | `phaseThreeCell` | Triplets de cellules parmi les top-K (`INTERESTING_CELLS_K_PHASE3 = 10`), les 6 ordres |
 
-2. BOUCLE MCTS (max 150 itérations)
+Chaque phase (sauf 0 et SAFE) est précédée d'un `if (!ctx.shouldStop())` : la troncature
+se fait donc dans cet ordre exact, du début vers la fin de la liste ci-dessus — un combat
+avec peu d'opérations disponibles peut ne jamais atteindre les phases 2/3.
 
-   a. SÉLECTION (UCB1)
-      Descendre dans l'arbre en choisissant le fils avec meilleur UCB:
-      UCB = moyenne + C × √(ln(parent.visits) / visits)
-      où C = 1.414 (√2)
+`phaseConstrainedEnd` est la fonction générique derrière la phase SAFE (forcer la
+position de fin de tour sur une cellule cible donnée) ; le commentaire de code
+l'appelle en interne "PHASE OTK ESCAPE" mais elle n'est utilisée dans `explore()` que
+pour construire la phase SAFE — ce n'est pas une phase distincte de l'ordonnancement.
 
-   b. EXPANSION
-      Si nœud pas terminal et pas fully expanded :
-        Ajouter un fils avec une action non essayée
+### Sélection et exécution
 
-   c. SIMULATION (Rollout)
-      Depuis le nouveau nœud, jouer greedy jusqu'à 3 actions
-      Calculer score total (actions + danger position finale)
-
-   d. BACKPROPAGATION
-      Remonter le score jusqu'à la racine
-      Incrémenter visits et totalValue de chaque nœud
-
-3. EXTRACTION
-   Suivre le chemin des fils les plus visités
-   Construire le combo correspondant
-```
-
-#### Structure MCTSNode
-
-```
-MCTSNode
-├── parent: MCTSNode?
-├── children: Array<MCTSNode>
-├── action: Action?              // Action qui a mené à ce nœud
-├── state: Consequences          // État du jeu à ce nœud
-├── remainingTP/MP: integer
-├── weaponInHand: Item?
-├── visits: integer              // Nombre de visites
-├── totalValue: real             // Somme des scores des simulations
-├── untriedActions: Array<Action>
-└── isTerminal: boolean
-```
-
-#### Formule UCB1
-
-```
-UCB(nœud) = exploitation + exploration
-          = (totalValue / visits) + C × √(ln(parent.visits) / visits)
-
-- exploitation : score moyen observé
-- exploration : bonus pour les nœuds peu visités
-- C = 1.414 : constante d'exploration (√2, standard)
-```
-
-#### Complexité
-
-- **Temps** : O(iterations × profondeur_arbre × actions)
-- **Espace** : O(nœuds_créés) - structure arborescente
-
-#### Avantages
-
-| Avantage | Explication |
-|----------|-------------|
-| **Exploration intelligente** | UCB1 balance exploration/exploitation |
-| **Trouve des synergies** | Peut découvrir des ordres non-évidents |
-| **Anytime** | Plus d'itérations = meilleur résultat |
-| **Rollouts** | Évalue les actions en contexte futur |
-
-#### Inconvénients
-
-| Inconvénient | Explication |
-|--------------|-------------|
-| **Coût élevé** | Consomme beaucoup d'opérations |
-| **Structure arbre** | Mémoire et overhead de création de nœuds |
-| **Rollouts stochastiques** | Variance dans l'évaluation |
-| **Paramètres sensibles** | C, MAX_ITERATIONS à tuner |
-
-#### Exemple
-
-```
-Arbre après 50 itérations :
-
-                    [Racine]
-                   visits: 50
-                  /    |    \
-            [Cure]  [Laser] [Shield]
-            v:25    v:15     v:10
-           /   \      |
-     [Laser] [Pistol] [Cure]
-       v:18    v:7     v:15
-
-Meilleur chemin (par visits) : Racine → Cure (25) → Laser (18)
-
-Note: Cure puis Laser a été exploré plus que Laser seul
-      car le buff de Cure améliore les simulations suivantes
-```
+- **Sélection des actions** : par knapsack (`ActionKnapsack`), pour une allocation
+  optimale du budget TP.
+- **Ordre d'exécution** : par priorité (indépendant de l'ordre de sélection).
+- **Fallback greedy** : après un kill, remplit le TP restant.
+- **Chaînage des conséquences** : chaque action est évaluée avec l'état résultant des
+  actions précédentes (buffs, HP, position).
+- **Buffs MP** : empilés au minimum nécessaire pour atteindre une cellule étendue.
 
 ---
 
-### BeamSearch - Recherche en faisceau
+## ActionKnapsack
 
-**Fichier** : `AI/BeamSearch`
+**Fichier** : `AI/Algorithms/ActionKnapsack`.
 
-#### Principe
+Résout un **sac à dos borné (bounded knapsack)** pour choisir, parmi un pool d'actions
+disponibles, le sous-ensemble qui maximise la somme des scores sous une contrainte de
+TP (`maxTP`). Gère :
 
-BeamSearch maintient un **faisceau** (beam) de K meilleures séquences partielles à chaque niveau de profondeur. À chaque niveau, on étend tous les candidats avec toutes les actions valides, puis on garde les K meilleurs.
+- les coûts de changement d'arme (le coût de base d'une action dépend de l'arme
+  actuellement en main, via `weaponIdx` sur chaque `KnapsackItem`),
+- les limites d'usage par item (`maxUse`),
+- une sélection par programmation dynamique plutôt que gloutonne.
 
-#### Algorithme
-
-```
-1. INITIALISATION
-   beam = [état_initial]  // Un seul candidat au départ
-   Pré-calculer actions prunées
-
-2. BOUCLE (max 6 niveaux de profondeur)
-
-   candidates = []
-
-   Pour chaque état dans beam :
-     Pour chaque action pruned valide :
-       Si action exécutable (TP, CD, cible vivante) :
-         nouvel_état = étendre(état, action)
-         Si score action > 0 :
-           ajouter nouvel_état à candidates
-
-   Si candidates vide : break
-
-   Trier candidates par actionScore décroissant
-   beam = top-K(candidates)  // Garder les K meilleurs
-
-3. ÉVALUATION POSITION FINALE
-   Pour chaque candidat dans beam final :
-     position = findBestPosition(cellule_courante, MP_restants, conséquences)
-     totalScore = actionScore + position.score
-
-   Meilleur combo = candidat avec meilleur totalScore
-```
-
-#### Stratégie d'évaluation de position
-
-La position n'est évaluée qu'à la **fin** du combo, pas pendant la recherche :
-
-- **Pendant le beam** : sélection par `actionScore` uniquement (performance)
-- **Beam final** : évaluation de position pour les ~15 candidats survivants
-- **Sélection finale** : `totalScore = actionScore + positionScore`
-
-**Pourquoi ?** Évaluer la position à chaque étape intermédiaire serait trop coûteux
-(~700 appels à `findBestPosition` vs ~15). La position intermédiaire n'a pas de sens
-car le combo n'est pas terminé.
-
-**Coût de findBestPosition** dépend du MP restant :
-- Combo agressif (0 MP) → 1 cellule → quasi gratuit
-- Combo conservateur (5+ MP) → 15+ cellules → plus coûteux
-
-#### Structure BeamState
-
-```
-BeamState
-├── actions: Array<Action>       // Séquence construite
-├── state: Consequences          // État courant
-├── remainingTP/MP: integer
-├── weaponInHand: Item?
-├── usageCounts: Map<Item, int>  // Utilisations par item
-├── actionScore: real            // Score cumulé des actions
-└── startCell: Cell
-```
-
-#### Complexité
-
-- **Temps** : O(BEAM_WIDTH × MAX_DEPTH × actions)
-- **Espace** : O(BEAM_WIDTH × MAX_DEPTH) - linéaire, pas d'arbre
-
-#### Configuration
-
-```
-BEAM_WIDTH = 15        // Candidats gardés par niveau
-MAX_DEPTH = 6          // Profondeur max (nombre d'actions)
-MAX_ACTIONS_TO_TRY = 8 // Pruning des actions
-```
-
-#### Avantages
-
-| Avantage | Explication |
-|----------|-------------|
-| **Multi-path** | Explore plusieurs séquences en parallèle |
-| **Pas de rollout** | Évaluation directe, pas de simulation |
-| **Mémoire bornée** | O(beam_width), pas d'arbre |
-| **Déterministe** | Résultat reproductible |
-| **Bon compromis** | Entre PTS (trop greedy) et MCTS (trop coûteux) |
-
-#### Inconvénients
-
-| Inconvénient | Explication |
-|--------------|-------------|
-| **Beam fini** | Peut perdre des bonnes séquences au pruning |
-| **Pas d'exploration UCB** | Pas de balance exploration/exploitation |
-| **Sensible au width** | Trop petit = myope, trop grand = lent |
-
-#### Exemple
-
-```
-Depth 0: beam = [∅]
-
-Depth 1: étendre avec toutes les actions
-  candidates = [Cure(500), Laser(450), Shield(200), Pistol(300)]
-  beam (top-3) = [Cure(500), Laser(450), Pistol(300)]
-
-Depth 2: étendre chaque candidat
-  Cure → [Cure+Laser(900), Cure+Shield(700), Cure+Pistol(750)]
-  Laser → [Laser+Pistol(700), Laser+Shield(600)]
-  Pistol → [Pistol+Laser(680)]
-
-  Tous candidats triés :
-    [Cure+Laser(900), Cure+Pistol(750), Cure+Shield(700), ...]
-
-  beam (top-3) = [Cure+Laser(900), Cure+Pistol(750), Cure+Shield(700)]
-
-Depth 3: continuer...
-
-Résultat final : Cure → Laser → ... (meilleur score cumulé)
-```
+C'est un outil utilisé par `ComboExplorer` (via `ComboBuilder`) pour une meilleure
+allocation du TP qu'une simple sélection gloutonne par score décroissant.
 
 ---
 
-### UnifiedMCTS - MCTS unifié
+## ComboBuilder et Combo.add
 
-**Principe** : Un seul arbre avec les cellules comme enfants de premier niveau. UCB1 alloue naturellement les itérations aux cellules prometteuses.
+**Fichier** : `AI/Algorithms/ComboBuilder`. Centralise la construction de combo pour
+éviter la duplication entre les phases de `ComboExplorer` : sélection knapsack, tri par
+priorité, fallback greedy, calcul de la position finale. Expose des méthodes
+spécialisées (`buildAtCell`, `buildAtCellBuffed`, `buildForTargetPrefixed`,
+`buildForAlly`, `buildAcrossCells`, …) toutes paramétrées par un `ExplorationContext`
+(ressources initiales, cartes d'atteignabilité, cellules à ignorer).
 
-Contrairement au MCTS standard qui exécute des recherches séparées par cellule, UnifiedMCTS intègre la sélection de cellule dans l'arbre lui-même.
-
-#### Structure de l'arbre
-
-```
-Root
-├── CellNode(cell1)           ← UCB1 choisit quelle cellule explorer
-│   ├── ActionNode(Laser) → ActionNode(Pistol) → ...
-│   └── ActionNode(Cure) → ...
-├── CellNode(cell2)
-│   └── ActionNode(Flash) → ...
-└── CellNode(current)         ← Rester sur place
-    └── ActionNode(Heal) → ...
-```
-
-#### Algorithme
-
-```
-1. PTS Baseline
-   - Exécuter PTS.buildCombo() → ptsCombo, ptsScore
-   - Si budget épuisé → retourner ptsCombo
-
-2. Construction de l'arbre
-   - Root avec untriedCells = cellules accessibles ayant des actions
-
-3. PTS Seeding (optionnel, activé par défaut)
-   - Pour chaque cellule avec un score PTS > 0 :
-     - Créer CellNode avec 3 visites virtuelles
-     - totalValue = ptsScore × 3
-
-4. Boucle MCTS (tant que budget ops disponible)
-   a. SELECT : Descendre avec UCB1
-      - Au root : choisir CellNode (UCB1 ou cellule non-essayée)
-      - Aux nœuds action : choisir ActionNode (UCB1 ou action non-essayée)
-
-   b. EXPAND : Créer nouveau nœud
-      - Si cellule non-essayée → créer CellNode
-      - Si action non-essayée → créer ActionNode
-
-   c. ROLLOUT : Simulation greedy (max 3 étapes)
-      - Depuis le nœud, sélectionner les meilleures actions greedily
-      - Score final = score actions + danger position finale
-
-   d. BACKPROPAGATE : Remonter le score
-      - Incrémenter visits, ajouter au totalValue
-      - Jusqu'à la racine
-
-5. Extraction du combo
-   - Suivre le chemin le plus visité (most-visited)
-   - Ajouter la meilleure position finale
-
-6. Résultat : max(mctsScore, ptsScore)
-   - Retourne le meilleur combo entre MCTS et PTS
-```
-
-#### Avantages
-
-| Avantage | Explication |
-|----------|-------------|
-| **Allocation naturelle** | UCB1 concentre les itérations sur les cellules prometteuses |
-| **PTS fallback** | Garantie d'un bon résultat minimum via PTS baseline |
-| **PTS seeding** | Démarrage informé, pas d'exploration aveugle |
-| **Exploration adaptative** | Les cellules peu prometteuses sont naturellement abandonnées |
-
-#### Inconvénients
-
-| Inconvénient | Explication |
-|--------------|-------------|
-| **Coût PTS initial** | Doit exécuter PTS avant MCTS |
-| **Arbre plus large** | Plus de nœuds au premier niveau (toutes les cellules) |
-| **Overhead mémoire** | Structure d'arbre plus profonde |
-
-#### Paramètres clés
+La construction elle-même passe par `Combo.add(action)` (`Model/Combos/Combo`) :
 
 ```leekscript
-UnifiedMCTS.EXPLORATION_CONSTANT = 1.414  // Facteur UCB1 (√2)
-UnifiedMCTS.MAX_ITERATIONS = 10000        // Limite d'itérations (budget ops = vraie limite)
-UnifiedMCTS.MAX_ACTIONS_PER_CELL = 8      // Pruning des actions par cellule
-UnifiedMCTS.SAFETY_BUFFER = 200000        // Réserve d'ops pour l'exécution
-UnifiedMCTS.USE_PTS_SEEDING = true        // Activer le seeding PTS
+boolean add(Action action) {
+    // rejette si le nombre d'usages de l'item dépasse maxUse
+    // sinon : actualise l'action avec les conséquences courantes du combo
+    // n'ajoute que si le score cumulé actualisé dépasse le score cumulé précédent
+}
 ```
+
+Autrement dit, **`Combo.add` est une porte sur l'amélioration du score cumulé** :
+une action n'est retenue que si elle fait strictement progresser le score total du
+combo par rapport à l'état actuel (`actualized.score! > prevScore`), pas seulement si
+elle a un score positif en isolation.
 
 ---
 
-## Modes hybrides
+## MCTS
 
-Les modes hybrides combinent PTS avec un autre algorithme pour bénéficier des avantages des deux.
+**Fichier** : `AI/Algorithms/MCTS`. Toujours présent, sélectionnable via
+`AI.MODE_MCTS`, mais **pas le mode par défaut**.
 
-### HYBRID
-
-**Principe** : PTS d'abord, puis MCTS **uniquement sur la cellule choisie par PTS**.
-
-```
-1. Exécuter PTS → ptsCombo, ptsScore
-2. Extraire la cellule de départ du combo PTS
-3. Exécuter MCTS depuis cette cellule → mctsCombo, mctsScore
-4. Retourner le meilleur des deux
-```
-
-**Schéma** :
-```
-PTS ──→ cellule 245 ──→ MCTS(245) ──→ meilleur(PTS, MCTS)
-                            │
-                            └── (ignore les autres cellules)
-```
-
-**Avantages** :
-- Plus rapide que MCTS complet (1 cellule au lieu de toutes)
-- PTS guide vers une bonne cellule
-
-**Inconvénients** :
-- MCTS limité à une seule position
-- Peut rater des combos depuis d'autres cellules
-
-### HYBRID_GUIDED
-
-**Principe** : PTS d'abord, puis MCTS sur **toutes les cellules ordonnées par score PTS**.
-
-```
-1. Exécuter PTS → ptsCombo, ptsScore
-   (PTS remplit aussi PTS.lastCellScores : Map<Cell, score>)
-
-2. Trier les cellules par score PTS décroissant
-
-3. Pour chaque cellule (dans l'ordre de priorité) :
-   - Si budget épuisé : break
-   - Exécuter MCTS depuis cette cellule
-   - Garder le meilleur combo
-
-4. Retourner max(ptsCombo, mctsCombo)
-```
-
-**Schéma** :
-```
-PTS ──→ scores par cellule ──→ MCTS(245) ──→ MCTS(301) ──→ MCTS(189)...
-            │                      │             │             │
-            │                      └─────────────┴─────────────┘
-            │                           ordre de priorité PTS
-            └── 245: 800
-                301: 750
-                189: 600
-```
-
-**Exemple concret** :
-```
-1. PTS trouve un combo score 800 depuis cellule 245
-2. MCTS explore dans l'ordre PTS :
-   - Cellule 245 → score 850
-   - Cellule 301 → score 920  ← Meilleur !
-   - Cellule 189 → (budget épuisé, skip)
-3. Retourne MCTS(301) avec score 920
-```
-
-**Avantages** :
-- Vrai MCTS complet (toutes les cellules)
-- Dégradation intelligente : si budget serré, meilleures cellules explorées d'abord
-- Ne peut jamais faire pire que PTS seul
-- Peut trouver un meilleur combo depuis une cellule différente de celle de PTS
-
-**Inconvénients** :
-- Plus lent que HYBRID simple
-- Peut timeout sur les dernières cellules
-
-### HYBRID_BEAM
-
-**Principe** : Comme HYBRID_GUIDED mais avec BeamSearch au lieu de MCTS.
-
-```
-1. Exécuter PTS → ptsCombo, ptsScore
-
-2. Trier les cellules par score PTS décroissant
-
-3. Pour chaque cellule (dans l'ordre de priorité) :
-   - Si budget épuisé : break
-   - Exécuter BeamSearch depuis cette cellule
-   - Garder le meilleur combo
-
-4. Retourner max(ptsCombo, beamCombo)
-```
-
-**Avantages** :
-- BeamSearch moins coûteux que MCTS
-- Peut explorer plus de cellules dans le budget
-- Bonne alternative si MCTS timeout
-
----
-
-## Comparaison détaillée
-
-### Tableau comparatif
-
-| Critère | PTS | MCTS | BeamSearch |
-|---------|-----|------|------------|
-| **Complexité temps** | O(targets × items) | O(iter × depth × actions) | O(beam × depth × actions) |
-| **Ops typiques** | 50k-100k | 200k-400k | 100k-200k |
-| **Qualité combo** | ★★★☆☆ | ★★★★★ | ★★★★☆ |
-| **Exploration** | Aucune (greedy) | UCB1 (équilibrée) | Multi-path (limitée) |
-| **Déterminisme** | Oui | Non (rollouts) | Oui |
-| **Mémoire** | O(opportunities) | O(nodes) arbre | O(beam × depth) |
-| **Trouve synergies** | Rarement | Souvent | Parfois |
-| **Paramétrage** | Simple | Complexe (C, iter) | Moyen (width, depth) |
-
-### Graphique conceptuel
-
-```
-Qualité
-  ↑
-  │                    ★ MCTS
-  │                ★ BeamSearch
-  │            ★ HYBRID_GUIDED
-  │        ★ HYBRID_BEAM
-  │    ★ PTS
-  │
-  └──────────────────────────→ Coût (ops)
-       50k   100k   200k   300k
-```
-
-### Quand chaque algo brille
-
-| Situation | Meilleur algo | Pourquoi |
-|-----------|---------------|----------|
-| Budget ops serré | PTS | Minimal ops, résultat décent |
-| Beaucoup de buffs/synergies | MCTS | Exploration trouve les ordres optimaux |
-| Équilibre qualité/perf | BeamSearch | Multi-path sans overhead arbre |
-| Comparaison fiable | HYBRID_GUIDED | Teste vraiment PTS vs MCTS |
-| Leek basse statistique | PTS | Moins d'actions possibles |
-| Leek haute statistique | MCTS/Beam | Plus de combos intéressants |
-
----
-
-## Guide de choix
-
-### Arbre de décision
-
-```
-                    ┌─────────────────┐
-                    │ Budget ops ?    │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-           Faible       Modéré         Élevé
-              │              │              │
-              ▼              ▼              ▼
-           ┌─────┐      ┌────────┐      ┌──────┐
-           │ PTS │      │ Beam/  │      │ MCTS │
-           └─────┘      │ Hybrid │      └──────┘
-                        └────────┘
-```
-
-### Recommandations par contexte
-
-| Contexte | Mode recommandé | Justification |
-|----------|-----------------|---------------|
-| **Combat standard** | `HYBRID_GUIDED` | Meilleur compromis, ne rate jamais le meilleur |
-| **Tests/Debug** | `PTS` | Rapide, reproductible |
-| **Recherche qualité max** | `MODE_MCTS` | Exploration complète |
-| **Leek level < 100** | `HYBRID_BEAM` | Moins d'actions, beam suffit |
-| **Leek level > 300** | `HYBRID_GUIDED` | Beaucoup d'items, MCTS utile |
-| **Farmer fight (multi-leek)** | `PTS` ou `HYBRID_BEAM` | Budget partagé entre leeks |
-
----
-
-## Exemples concrets
-
-### Exemple 1 : Combo simple (3 actions)
-
-**Situation** : 10 TP, items = [Pistol(3TP), Laser(4TP), Cure(3TP)]
-
-| Algo | Résultat | Explication |
-|------|----------|-------------|
-| PTS | Cure → Laser → stay | Self-cast first, puis meilleur dégât |
-| MCTS | Cure → Laser → stay | Même résultat, validé par exploration |
-| Beam | Cure → Laser → stay | Même résultat |
-
-→ **Cas simple** : tous les algos convergent.
-
-### Exemple 2 : Synergie buff (STR boost)
-
-**Situation** : 12 TP, items = [Protein(2TP, +50 STR), Pistol(3TP), Destroyer(5TP)]
-
-Sans buff : Destroyer fait 200 dmg, Pistol fait 80 dmg
-Avec Protein : Destroyer fait 250 dmg, Pistol fait 100 dmg
-
-| Algo | Résultat | Score | Explication |
-|------|----------|-------|-------------|
-| PTS | Destroyer → Pistol → Pistol | 360 | Prend le plus gros dégât d'abord |
-| MCTS | Protein → Destroyer → Pistol | 370 | Explore et trouve la synergie |
-| Beam | Protein → Destroyer → Pistol | 370 | Multi-path trouve aussi |
-
-→ **Synergies** : MCTS et Beam trouvent, PTS rate.
-
-### Exemple 3 : Kill chain
-
-**Situation** : 15 TP, Kill donne +2 TP (passif), Ennemi1 a 50 HP, Ennemi2 a 200 HP
-
-| Algo | Résultat | Explication |
-|------|----------|-------------|
-| PTS | Attack Ennemi2 (plus de points) × N | Cible le score le plus élevé d'abord |
-| MCTS | Kill Ennemi1 → Attack Ennemi2 × N | Simule le bonus TP du kill |
-| Beam | Kill Ennemi1 → Attack Ennemi2 × N | Trouve via multi-path |
-
-→ **Passifs** : MCTS et Beam exploitent les kills grâce au chaînage.
-
-### Exemple 4 : Positionnement critique
-
-**Situation** : HP faible, danger élevé sur certaines cellules
-
-| Algo | Résultat | Explication |
-|------|----------|-------------|
-| PTS | Attaque depuis cellule dangereuse | Maximise damage, ignore position |
-| MCTS | Attaque depuis cellule safe | Rollout inclut le danger |
-| Beam | Attaque depuis cellule safe | Score inclut danger via position |
-
-→ **Danger** : Tous gèrent via le scoring de position, mais MCTS l'intègre mieux dans ses rollouts.
-
----
-
-## Tuning et configuration
-
-### Paramètres par algorithme
-
-#### PTS
-Pas de paramètres configurables - algorithme déterministe basé sur le scoring.
-
-#### MCTS
-```leekscript
-static real EXPLORATION_CONSTANT = 1.414  // √2, standard UCB1
-static integer MAX_ACTIONS_TO_TRY = 8     // Pruning action space
-static integer MAX_ITERATIONS = 150       // Iterations par cellule
-static integer SAFETY_BUFFER = 200000     // Ops réservées pour play()
-```
-
-| Paramètre | Effet si augmenté | Effet si diminué |
-|-----------|-------------------|------------------|
-| `EXPLORATION_CONSTANT` | Plus d'exploration, moins de focus | Plus d'exploitation, risque local max |
-| `MAX_ACTIONS_TO_TRY` | Plus d'options, plus lent | Moins d'options, peut rater des combos |
-| `MAX_ITERATIONS` | Meilleure qualité, plus lent | Plus rapide, moins précis |
-| `SAFETY_BUFFER` | Plus de marge, moins d'exploration | Plus d'exploration, risque timeout |
-
-#### BeamSearch
-```leekscript
-static integer BEAM_WIDTH = 15            // Candidats par niveau
-static integer MAX_DEPTH = 6              // Profondeur max
-static integer MAX_ACTIONS_TO_TRY = 8     // Pruning action space
-static integer SAFETY_BUFFER = 200000     // Ops réservées pour play()
-```
-
-| Paramètre | Effet si augmenté | Effet si diminué |
-|-----------|-------------------|------------------|
-| `BEAM_WIDTH` | Moins de pruning, plus lent | Plus rapide, peut perdre des bons chemins |
-| `MAX_DEPTH` | Combos plus longs | Combos plus courts |
-| `MAX_ACTIONS_TO_TRY` | Plus d'options par état | Moins d'options, plus rapide |
-
-### Recommandations de tuning
-
-**Pour plus de qualité** (si ops disponibles) :
-```leekscript
-MCTS.MAX_ITERATIONS = 200
-BeamSearch.BEAM_WIDTH = 20
-BeamSearch.MAX_DEPTH = 8
-```
-
-**Pour plus de vitesse** (si budget serré) :
-```leekscript
-MCTS.MAX_ITERATIONS = 80
-MCTS.MAX_ACTIONS_TO_TRY = 5
-BeamSearch.BEAM_WIDTH = 8
-BeamSearch.MAX_DEPTH = 4
-```
-
----
-
-## Classement final
-
-### Par qualité de combo (meilleur en haut)
-
-1. **UNIFIED_MCTS** ★★★★★ - Arbre unifié, UCB1 alloue aux cellules prometteuses
-2. **MCTS** ★★★★★ - Exploration UCB1, trouve les synergies complexes
-3. **HYBRID_GUIDED** ★★★★½ - MCTS complet avec fallback PTS
-4. **BeamSearch** ★★★★☆ - Multi-path efficace
-5. **HYBRID_BEAM** ★★★★☆ - Beam avec guidance PTS
-6. **HYBRID** ★★★½☆ - MCTS limité à 1 cellule
-7. **PTS** ★★★☆☆ - Greedy, rate les synergies
-
-### Par efficacité (ops utilisées)
-
-1. **PTS** ★★★★★ - Très économique
-2. **BeamSearch** ★★★★☆ - Économique
-3. **HYBRID** ★★★½☆ - Modéré
-4. **UNIFIED_MCTS** ★★★☆☆ - Modéré (allocation dynamique)
-5. **HYBRID_BEAM** ★★★☆☆ - Modéré à élevé
-6. **HYBRID_GUIDED** ★★½☆☆ - Élevé
-7. **MCTS** ★★☆☆☆ - Très élevé
-
-### Recommandation globale
-
-| Usage | Mode | Justification |
-|-------|------|---------------|
-| **Production** | `UNIFIED_MCTS` | Arbre unifié, allocation naturelle par UCB1 |
-| **Alternative** | `HYBRID_GUIDED` | Si UNIFIED_MCTS pose problème |
-| **Expérimentation** | `MODE_MCTS` ou `MODE_BEAM` | Pour comparer les algos purs |
-| **Debug/Tests** | `MODE_PTS` | Rapide et reproductible |
-
----
-
-## Annexe : Changement de mode
-
-Pour changer l'algorithme, modifier dans `main` la ligne `AI.mode = ...` :
+Arbre de recherche classique avec sélection UCB1 :
 
 ```leekscript
-// ╔══════════════════════════════════════════════════════════════════════════╗
-// ║                         ALGORITHM CONFIGURATION                          ║
-// ╠══════════════════════════════════════════════════════════════════════════╣
-// ║  MODE_PTS           Fast greedy, target-first                            ║
-// ║  MODE_MCTS          Full tree search                                     ║
-// ║  MODE_BEAM          Multi-path beam search                               ║
-// ║  MODE_HYBRID        PTS seeds MCTS on 1 cell                             ║
-// ║  MODE_HYBRID_GUIDED PTS guides MCTS cell order                           ║
-// ║  MODE_HYBRID_BEAM   PTS guides BeamSearch                                ║
-// ║  MODE_UNIFIED_MCTS  Single tree with cells as first-level [RECOMMENDED]  ║
-// ╚══════════════════════════════════════════════════════════════════════════╝
-AI.mode = AI.MODE_UNIFIED_MCTS
+static final real EXPLORATION_CONSTANT = 1.414  // sqrt(2)
 ```
 
-**Note** : On utilise une assignation directe (`AI.mode = ...`) car LeekScript ne permet pas les appels de méthode au scope global (en dehors des fonctions).
+```leekscript
+real getUCBScore(real explorationConstant) {
+    if (this.visits == 0) return 999999.0
+    real exploitation = this.totalValue / this.visits
+    real exploration = explorationConstant * sqrt(log(this.parent!.visits as real) / this.visits)
+    return exploitation + exploration
+}
+```
 
-Après modification, uploader le fichier `main` avec :
+**Point important** : `totalValue` accumule des scores de combo bruts, qui sont
+couramment de l'ordre de plusieurs milliers (kills, dégâts, buffs). Le terme
+d'exploitation (`totalValue / visits`) est donc lui-même de cet ordre de grandeur,
+alors que le terme d'exploration (`1.414 × sqrt(ln(visits_parent)/visits)`) reste
+petit (grandeur unitaire à quelques dizaines dans les régimes usuels de `visits`).
+En pratique, le terme d'exploitation domine presque toujours la sélection : **cette
+implémentation de MCTS est donc effectivement gloutonne**, ce qui explique pourquoi
+elle n'est pas le chemin porteur de l'IA (`ComboExplorer` a pris ce rôle).
+
+---
+
+## BeamSearch
+
+**Fichier** : `AI/Algorithms/BeamSearch`. Toujours présent, sélectionnable via
+`AI.MODE_BEAM`, pas le mode par défaut.
+
+Maintient un faisceau de largeur fixe des meilleures séquences partielles :
+
+1. À chaque profondeur, étend chaque état du faisceau avec toutes les actions
+   valides, note les candidats par score d'action seul.
+2. Garde les `BEAM_WIDTH` meilleurs candidats.
+3. La position finale n'est évaluée qu'à la fin, sur les candidats survivants du
+   faisceau final (`totalScore = actionScore + positionScore`) — pas à chaque niveau
+   intermédiaire, pour rester bon marché en opérations.
+
+Pas de structure arborescente (mémoire linéaire en `beam_width × depth`), pas de
+rollout, pas d'UCB1 — sélection purement gloutonne du top-K à chaque niveau.
+
+---
+
+## Scoring et coefficients figés
+
+**Fichier** : `HiddenKnowledges/ScoringConfig`, `HiddenKnowledges/Scoring`.
+
+```leekscript
+static boolean DYNAMIC_COEFS = false   // valeur par défaut
+```
+
+Avec `DYNAMIC_COEFS = false` (le défaut) :
+
+- `Scoring.refresh()` précalcule et **fige** les coefficients dynamiques par
+  (entité, stat) **en début de tour**, dans `_cache_dynamic_coef`.
+- `Scoring.getDynamicCoef()` fait alors une pure lecture de cache pendant toute
+  l'exploration de `ComboExplorer` — les modificateurs (`ScoringModifiers`) voient
+  donc l'état du champ de bataille **au début du tour**, pas l'état simulé au fil
+  du combo (HP après dégâts, morts en cours de combo, etc.).
+- Si `DYNAMIC_COEFS = true`, `getDynamicCoef()` recalcule tout dynamiquement à
+  partir du HP simulé dans les conséquences courantes — mais ce n'est pas le
+  réglage actif par défaut.
+
+Ce détail renforce le point de la section précédente : la "connaissance du futur"
+de l'IA est essentiellement figée en début de tour, sauf le peu que
+`ComboExplorer`/`Combo`/`Consequences` recalculent explicitement pendant la
+construction d'un combo (chaînage de conséquences, kills, buffs).
+
+---
+
+## Changer de mode
+
+Dans `tagadalive/main` :
+
+```leekscript
+// ╔═════════════════════════════════════════════════════════════════════╗
+// ║                      ALGORITHM CONFIGURATION                        ║
+// ╠═════════════════════════════════════════════════════════════════════╣
+// ║  MODE_MCTS             Full tree search                             ║
+// ║  MODE_BEAM             Multi-path beam search                       ║
+// ║  MODE_COMBO_EXPLORER   Multi-phase exploration [DEFAULT]            ║
+// ╚═════════════════════════════════════════════════════════════════════╝
+AI.mode = AI.MODE_COMBO_EXPLORER
+```
+
+Après modification, uploader `main` :
+
 ```bash
 python -m src.tools.aisync put main tagadalive/main
-```
-
----
-
-## Structure des fichiers
-
-```
-AI/
-├── AI                    # Façade principale, getCombo()
-├── Algorithms/
-│   ├── MCTS              # Monte Carlo Tree Search
-│   ├── PTS               # Priority Target Simulation
-│   ├── BeamSearch        # Beam Search
-│   └── Hybrid            # Modes hybrides (combinaisons)
-├── Scoring               # Système de scoring
-├── ScoringConfig         # Constantes ML-tunable
-├── BattleState           # État de la bataille
-├── EntityCoefs           # Coefficients par type d'entité
-├── ScoringModifiers      # Modificateurs de score
-└── Opportunity           # Opportunités pour PTS
 ```

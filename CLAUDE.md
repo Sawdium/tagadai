@@ -38,7 +38,7 @@ tagadai/
 ├── scripts/setup_generator.sh  # Builds the local fight generator into .cache/
 ├── leekwars_gardener/  # REFERENCE ONLY - never edit
 ├── tagadalive/         # ACTIVE AI - LeekScript v4
-│   ├── AI/ (AI, Algorithms/{PTS,MCTS,BeamSearch,UnifiedMCTS,Hybrid}, Scoring, ScoringConfig)
+│   ├── AI/ (AI, Algorithms/{ComboExplorer,MCTS,BeamSearch,ActionKnapsack,ComboBuilder,BulbGreedy,Hybrid}, Scoring, ScoringConfig)
 │   ├── Model/ (Entity, Item, Cell, Action, Combo)
 │   ├── Controlers/ (BattleState, Maps/, Fight)
 │   ├── Services/ (Damages, Benchmark)
@@ -319,32 +319,32 @@ When a test fight crashes or shows "AI has ERRORS", do NOT assume it's an operat
 - `main` - Entry point, algorithm mode selection (see configuration box)
 - `AI/AI` - Mode dispatcher and utilities
 - `AI/Algorithms/` - Search algorithms:
-  - `PTS` - Priority Target Simulation (greedy)
-  - `MCTS` - Monte Carlo Tree Search with UCB1
-  - `BeamSearch` - Multi-path beam search
-  - `UnifiedMCTS` - Single tree with cells as first-level nodes
-  - `Hybrid` - Combined modes (PTS + MCTS/Beam)
+  - `ComboExplorer` - Fixed-phase combo exploration (Stay, SAFE, T, I, R, A, P, AP, PIP, 1, 2, 3), truncated by op budget
+  - `ActionKnapsack` - DP-based TP allocation (bounded knapsack over action scores)
+  - `ComboBuilder` - Shared combo-assembly logic; gates additions on cumulative score improvement (`Combo.add`)
+  - `MCTS` - Monte Carlo Tree Search with UCB1 (still present, not the default)
+  - `BeamSearch` - Multi-path beam search (still present, not the default)
+  - `BulbGreedy`, `Hybrid` - other algorithm files present but not wired to a selectable `AI.mode`
 - `HiddenKnowledges/` - Scoring system (private repo with real weights)
 - `Controlers/BattleState` - Per-turn team state
 - `Model/` - Entity, Item, Cell, Action, Combo classes
-- `Controlers/Maps/` - Pathfinding, danger maps, action generation
+- `Controlers/Maps/` - Pathfinding, danger maps, action generation (`MapDanger`, `MapCellScore`, `MapAction`, etc.)
 - `Services/Damages` - Damage calculation with shields/erosion
 
-**Key patterns**: Consequence simulation, danger map caching, dual-phase exploration (offense vs offense+defense).
+**Key patterns**: Consequence simulation (chained through a combo), danger map caching.
+There is **no lookahead beyond the current turn** — the future is represented entirely
+inside single-turn evaluation (`turnsLeft`, `durationMitigation`, `getEffectiveDuration`,
+turn-order modifiers, danger/threat maps), not by simulating future turns.
 
 ### Algorithm Modes
 
-Set via `AI.mode` in `main`:
+Set via `AI.mode` in `main`. Only three constants exist in `AI/AI`:
 
 | Mode | Constant | Description |
 |------|----------|-------------|
-| PTS | `MODE_PTS` | Fast greedy, target-first |
-| MCTS | `MODE_MCTS` | Full tree search |
+| MCTS | `MODE_MCTS` | Full tree search (UCB1 exploration term is small vs. raw combo scores — effectively greedy) |
 | BeamSearch | `MODE_BEAM` | Multi-path beam search |
-| Hybrid | `MODE_HYBRID` | PTS seeds MCTS on 1 cell |
-| Hybrid Guided | `MODE_HYBRID_GUIDED` | PTS guides MCTS cell order |
-| Hybrid Beam | `MODE_HYBRID_BEAM` | PTS guides BeamSearch |
-| Unified MCTS | `MODE_UNIFIED_MCTS` | Single tree with cells as first-level **[DEFAULT]** |
+| Combo Explorer | `MODE_COMBO_EXPLORER` | Fixed-phase exploration **[DEFAULT]** |
 
 See [docs/ALGORITHMS.md](docs/ALGORITHMS.md) for detailed algorithm documentation.
 
