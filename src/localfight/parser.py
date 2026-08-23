@@ -17,10 +17,17 @@ class ActionType(IntEnum):
     generator's own IDs, which differ from the legacy IDs the website API
     reports (there USE_WEAPON is 1 and USE_CHIP is 2).
 
-    Damage is NOT all reported as LIFE_LOST. The generator also emits
-    107 NOVA_DAMAGE, 108 DAMAGE_RETURN, 109 LIFE_DAMAGE, 110 POISON_DAMAGE and
-    111 AFTEREFFECT, none of which are parsed below — so a poison/magic build
-    currently comes out with damage_dealt = 0.
+    Damage is NOT all reported as LIFE_LOST. The generator's `DamageType`
+    maps DIRECT to 101, NOVA to 107, RETURN to 108, LIFE to 109, and both
+    POISON and AFTEREFFECT to 110. Action id 111 exists in `Action.java` but
+    nothing emits it. Counting only 101 loses almost everything a poison or
+    magic build does: measured on one magic fight, 101 carried 230 HP against
+    18 610 for 110 and 1 304 for 107.
+
+    Every damage action names its VICTIM in `action[1]`, so damage is
+    accumulated victim-side and needs no attribution. Crediting it to whoever
+    is currently acting books poison (which ticks on the victim's own turn)
+    and damage-return to the wrong side.
     """
 
     START_FIGHT = 0
@@ -34,8 +41,23 @@ class ActionType(IntEnum):
     USE_WEAPON = 16
     LIFE_LOST = 101
     LIFE_GAIN = 103
+    NOVA_DAMAGE = 107
+    DAMAGE_RETURN = 108
+    LIFE_DAMAGE = 109
+    POISON_DAMAGE = 110
     SAY = 203
     AI_ERROR = 1002
+
+
+# Every generator action that removes HP. All of them carry the victim in
+# action[1] and the amount in action[2].
+DAMAGE_ACTIONS = frozenset({
+    ActionType.LIFE_LOST,
+    ActionType.NOVA_DAMAGE,
+    ActionType.DAMAGE_RETURN,
+    ActionType.LIFE_DAMAGE,
+    ActionType.POISON_DAMAGE,
+})
 
 
 @dataclass
@@ -207,12 +229,14 @@ def _parse_turns(actions: list[list]) -> list[TurnRecord]:
                     )
                 )
 
-        elif action_type == ActionType.LIFE_LOST:
+        elif action_type in DAMAGE_ACTIONS:
             if current_turn is not None and len(action) > 2:
-                entity_id = action[1]
+                victim_id = action[1]
                 damage = action[2]
-                # Check if it's damage dealt or taken
-                if entity_id != current_turn.entity_id:
+                # The victim is always action[1]. Attributing to the acting
+                # entity instead would book poison to its own victim, since
+                # poison ticks at the start of the poisoned entity's turn.
+                if victim_id != current_turn.entity_id:
                     current_turn.damage_dealt += damage
                 else:
                     current_turn.damage_taken += damage
