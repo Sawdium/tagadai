@@ -150,6 +150,31 @@ python -m src.tools.localfight --json               # raw generator output
 
 **CRITICAL: Upload Safety** — AI files are identified by their full path (e.g. `Model/Combos/Action`, `main`). Always run `aisync list` (full output, not grep) to verify paths before upload. `put` reports "'<path>' is VALID" or "'<path>' has ERRORS" after upload — check it. Run a test fight after bulk edits.
 
+**CRITICAL: there are FIVE accounts, and `tagadalive` must be pushed to all of them**:
+`tagadai` (the default from `.env`), `tagadanar`, `tagadagain`, `tagadalone`,
+`tagadalton`. Any AI change is only half-shipped until every one has it:
+
+```bash
+python -m src.tools.aisync push tagadalive                      # tagadai (default)
+for a in tagadanar tagadagain tagadalone tagadalton; do
+  python -m src.tools.aisync --account $a push tagadalive
+done
+```
+
+**`aisync sync` compares PATHS ONLY** — `cmd_sync` diffs the path sets and never looks
+at file contents. "overlap: 84, only local: 0, only remote: 0" is therefore *not*
+evidence that an account is up to date: an account running months-old code reports
+exactly that. Verifying content means reading each file back (`api.read_ai(path)`) and
+comparing an md5 against the local file.
+
+Two traps when writing such a check:
+- **`total_chars` from `list_ais()` is the size of the whole INCLUDE TREE**, not of the
+  file itself. `main` reports ~892k against a 2.2k file. It is only comparable for leaf
+  files that include nothing, so it cannot serve as a cheap content check.
+- **`/ai/read` is rate-limited.** A few dozen sequential reads start returning
+  `rate_limit`; a verifier must back off and retry, or it will report false mismatches
+  for every throttled file.
+
 ---
 
 ## Testing
