@@ -114,6 +114,32 @@ combos fit in the budget, strength drops. The score function looks fine in
 isolation; the AI is simply thinking less. Win rate alone cannot separate
 "worse judgement" from "less search", and the fix for each is opposite.
 
+### 2.4 Modifier scales are not commensurable
+
+- [x] `getChipReadyModifier` now clamps to `ScoringConfig.CHIP_READY_MAX`
+      (2026-08-23). The ceiling is 20.0, above the 19.0 a build can actually
+      reach, so it changed no behaviour — it is there so the term saturates
+      instead of running away when `CHIP_READY_FACTOR` is fitted.
+- [ ] Decide whether its *range* should be compressed as well.
+
+The clamp stops a runaway, it does not make the term comparable to its
+neighbours. Measured on the live roster, this one modifier multiplies a
+coefficient by **x17.0** (Claudias/Claudies, RST 8.5), x13.0 (Claudius,
+WSD 6.5) and x10.0 (AGI 5.0), while every sibling in `ScoringModifiers`
+clamps to roughly [0.5, 1.5] or [1, 5] — and all of them multiply into the
+same `base *=` chain at `Scoring:307/314`.
+
+So chip-readiness currently dominates that product by an order of magnitude.
+That may be exactly what was intended when it was hand-tuned, which is why
+compressing it is a decision and not a cleanup: dropping the ceiling to 5.0
+would take Claudias and Claudies from x17 to x5 on resistance scoring and
+needs win-rate validation, not just a smoke test.
+
+**Why it matters for fitting**: an optimiser perturbing several modifiers at
+once cannot tell "this weight is important" from "this weight sits on a
+scale ten times larger than the others". Any per-modifier bound the tuner
+respects should be recorded here before the first SPSA/CMA-ES run.
+
 ---
 
 ## 3. Carnet
