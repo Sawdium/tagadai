@@ -51,6 +51,7 @@ from pathlib import Path
 from src.common.config import get_paths
 from src.common.errors import TagadAIError
 from src.localfight.pool import LeekPool, LeekRef
+from src.localfight.batch import GeneratorPool
 from src.localfight.runner import RunnerError, run_fight_raw
 from src.tools.localfight import build_scenario, collect_logs, link_ai_tree
 
@@ -369,9 +370,10 @@ def measure(result: dict, seed: int, names: dict[int, str],
 TIMINGS: list[tuple[float, float, int]] = []   # (compile, execute, turns)
 
 
-def play(entities: list[dict], seed: int, turns: int, timeout: float) -> list[Observation]:
-    scenario = build_scenario(entities, seed, turns)
-    result = json.loads(run_fight_raw(json.dumps(scenario), timeout=timeout))
+def play(entities: list[dict], seed: int, turns: int, timeout: float,
+         gen: "GeneratorPool | None" = None) -> list[Observation]:
+    scenario = json.dumps(build_scenario(entities, seed, turns))
+    result = gen.run(scenario) if gen is not None else json.loads(run_fight_raw(scenario, timeout=timeout))
     TIMINGS.append((result.get("compilation_time", 0) / 1e9,
                     result.get("execution_time", 0) / 1e9,
                     result.get("duration", 0)))
@@ -598,7 +600,7 @@ def main() -> int:
     p.add_argument("--leek", default="", help="first leek, `account:Name` (default: first)")
     p.add_argument("--leek2", default="", help="second leek (default: same as --leek)")
     p.add_argument("--turns", type=int, default=64, help="max turns per fight")
-    p.add_argument("--jobs", type=int, default=4, help="fights in parallel")
+    p.add_argument("--jobs", type=int, default=None, help="fights in parallel (default: physical cores)")
     p.add_argument("--timeout", type=float, default=600.0)
     p.add_argument("--csv", type=Path, help="write/read the observation table")
     p.add_argument("--report-only", action="store_true", help="re-analyse a --csv, run nothing")
@@ -629,9 +631,10 @@ def main() -> int:
         seeds = [args.first_seed + i for i in range(args.seeds)]
         print(f"  {ref1} vs {ref2}, {len(seeds)} seeds, AI {PROBE_AI}", file=sys.stderr)
         rows: list[Observation] = []
-        with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
+        with GeneratorPool(workers=args.jobs, timeout=args.timeout) as gen, \
+                ThreadPoolExecutor(max_workers=gen.workers) as ex:
             for got in ex.map(
-                lambda s: play(entities, s, args.turns, args.timeout), seeds
+                lambda s: play(entities, s, args.turns, args.timeout, gen), seeds
             ):
                 rows.extend(got)
                 print(f"\r  {len(rows)} observations", end="", file=sys.stderr)

@@ -1,8 +1,10 @@
 """
 Parallel fight execution for faster data generation.
 
-Uses ThreadPoolExecutor to run multiple fights concurrently,
-maximizing CPU utilization for batch scenarios.
+Fights run on a `GeneratorPool` of persistent generator JVMs (see batch.py
+for why: one-shot JVMs spend most of their CPU JIT-compiling the AI and
+starve each other when run side by side). `persistent=False` falls back to
+one JVM per fight, which is what the pool is validated against.
 """
 
 import os
@@ -11,6 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, List, Any
 import time
 
+from .batch import GeneratorPool
 from .runner import run_fight, RunnerError
 from .scenario import Scenario
 from .parser import parse_fight_result, FightResult
@@ -51,7 +54,7 @@ class FightTask:
     index: int
     scenario: Scenario
     timeout: float = 30.0
-    nocache: bool = True
+    nocache: bool = False
 
 
 class ParallelRunner:
@@ -65,19 +68,23 @@ class ParallelRunner:
         self,
         max_workers: Optional[int] = None,
         timeout: float = 30.0,
-        nocache: bool = True,
+        nocache: bool = False,
+        persistent: bool = True,
     ):
         """
         Initialize the parallel runner.
 
         Args:
-            max_workers: Maximum concurrent fights (default: CPU count)
+            max_workers: Maximum concurrent fights (default: physical cores)
             timeout: Timeout per fight in seconds
-            nocache: Disable AI caching (recommended for varied scenarios)
+            nocache: Bypass the generator's compile cache (3x slower; see runner.py)
+            persistent: Reuse generator JVMs across fights (GeneratorPool)
+                instead of starting one per fight
         """
-        self.max_workers = max_workers or max(1, os.cpu_count() or 4)
+        self.max_workers = max_workers or max(1, (os.cpu_count() or 4) // 2)
         self.timeout = timeout
         self.nocache = nocache
+        self.persistent = persistent
 
     def run_batch(
         self,
@@ -118,30 +125,35 @@ class ParallelRunner:
             for i, scenario in enumerate(scenarios)
         ]
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all tasks
-            future_to_task = {
-                executor.submit(self._execute_task, task): task
-                for task in tasks
-            }
+        pool = self._pool()
+        try:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Submit all tasks
+                future_to_task = {
+                    executor.submit(self._execute_task, task, pool): task
+                    for task in tasks
+                }
 
-            # Collect results as they complete
-            for future in as_completed(future_to_task):
-                task = future_to_task[future]
-                completed += 1
+                # Collect results as they complete
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
+                    completed += 1
 
-                try:
-                    result = future.result()
-                    results[task.index] = result
+                    try:
+                        result = future.result()
+                        results[task.index] = result
 
-                    if progress_callback:
-                        progress_callback(completed, len(scenarios), result)
+                        if progress_callback:
+                            progress_callback(completed, len(scenarios), result)
 
-                except Exception as e:
-                    errors.append((task.index, str(e)))
+                    except Exception as e:
+                        errors.append((task.index, str(e)))
 
-                    if progress_callback:
-                        progress_callback(completed, len(scenarios), None)
+                        if progress_callback:
+                            progress_callback(completed, len(scenarios), None)
+        finally:
+            if pool is not None:
+                pool.close()
 
         total_time = time.time() - start_time
         successful_results = [r for r in results if r is not None]
@@ -173,13 +185,21 @@ class ParallelRunner:
         )
         return parse_fight_result(raw_result)
 
-    def _execute_task(self, task: FightTask) -> FightResult:
+    def _pool(self) -> Optional[GeneratorPool]:
+        if not self.persistent:
+            return None
+        return GeneratorPool(workers=self.max_workers, nocache=self.nocache, timeout=self.timeout)
+
+    def _execute_task(self, task: FightTask, pool: Optional[GeneratorPool] = None) -> FightResult:
         """Execute a single fight task."""
-        raw_result = run_fight(
-            task.scenario,
-            timeout=task.timeout,
-            nocache=task.nocache,
-        )
+        if pool is not None:
+            raw_result = pool.run(task.scenario.to_json())
+        else:
+            raw_result = run_fight(
+                task.scenario,
+                timeout=task.timeout,
+                nocache=task.nocache,
+            )
         return parse_fight_result(raw_result)
 
 
@@ -194,7 +214,7 @@ class BatchBuilder:
         self.scenarios: List[Scenario] = []
         self._max_workers: Optional[int] = None
         self._timeout: float = 30.0
-        self._nocache: bool = True
+        self._nocache: bool = False
         self._progress_callback: Optional[Callable] = None
 
     def add_scenario(self, scenario: Scenario) -> "BatchBuilder":

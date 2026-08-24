@@ -64,10 +64,12 @@ import math
 import statistics
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 from dataclasses import dataclass
 
 from src.common.errors import TagadAIError
 from src.localfight.pool import LeekPool, LeekRef
+from src.localfight.batch import GeneratorPool
 from src.localfight.runner import RunnerError, run_fight_raw
 from src.tools.localfight import build_scenario, collect_logs, link_ai_tree
 
@@ -166,9 +168,12 @@ def measure(result: dict) -> Fight:
     )
 
 
-def play(entities: list[dict], seed: int, turns: int, timeout: float) -> Fight:
-    scenario = build_scenario(entities, seed, turns)
-    return measure(json.loads(run_fight_raw(json.dumps(scenario), timeout=timeout)))
+def play(entities: list[dict], seed: int, turns: int, timeout: float,
+         gen: Optional[GeneratorPool] = None) -> Fight:
+    scenario = json.dumps(build_scenario(entities, seed, turns))
+    if gen is not None:
+        return measure(gen.run(scenario))
+    return measure(json.loads(run_fight_raw(scenario, timeout=timeout)))
 
 
 # ---------------------------------------------------------------- statistics
@@ -242,9 +247,10 @@ def run(args, pool: LeekPool, matchups: list[tuple[LeekRef, LeekRef]]) -> list[P
             for i in range(args.seeds):
                 jobs.append((m, args.first_seed + i, a_slot, entities))
 
-    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool_exec:
+    with GeneratorPool(workers=args.jobs, timeout=args.timeout) as gen, \
+            ThreadPoolExecutor(max_workers=gen.workers) as pool_exec:
         played = list(pool_exec.map(
-            lambda j: play(j[3], j[1], args.turns, args.timeout),
+            lambda j: play(j[3], j[1], args.turns, args.timeout, gen),
             jobs,
         ))
 
@@ -374,7 +380,8 @@ def main() -> int:
     parser.add_argument("--turns", type=int, default=64, help="max turns before a draw")
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--alpha", type=float, default=0.05, help="significance level")
-    parser.add_argument("--jobs", type=int, default=4, help="fights to run in parallel")
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="fights to run in parallel (default: physical cores)")
     parser.add_argument("--account", help="Override LEEKWARS_LOGIN (password from .env)")
     parser.add_argument("--json", action="store_true", help="machine-readable summary")
     args = parser.parse_args()
