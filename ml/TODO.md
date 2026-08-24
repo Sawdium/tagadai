@@ -97,9 +97,97 @@ only mid-turn summons, never ally leeks. `ALLY_CANDIE_MODIFIER` must not be
 fitted before that ordering is settled, or the fitted value silently changes
 meaning when it is.
 
+### 2.0 Plumbing — done 2026-08-24
+
+- [x] **Fights are 8x cheaper.** Compile cache on (was `--nocache` on every
+      fight: 10.3s -> 3.4s), persistent generator JVMs (`src/localfight/batch.py`),
+      measured JVM flags. 0.26 -> 2.07 fights/s on 8 workers, ~7,500/hour.
+      Numbers and reasons in `src/localfight/README.md`.
+- [x] **§2.3 counters surfaced** without touching the AI: `FightResult.turn_stats`
+      reads the `ComboExplorer: N combos` and `##MARKER##…|o:ops/max` lines the
+      AI already logs every turn.
+- [x] **Variant materialiser** (`src/tuning/variant.py`): `materialize({"KILL_VALUE": 25000,
+      "ENTITY_LEEK.HP": 1.2})` -> a rewritten copy under `.cache/variants/`, named
+      by overrides + source fingerprint, playable as an AI path.
+
+### 2.0b Direction — Texel first (2026-08-24)
+
+The win-rate loop is the *validator*, not the optimiser. One `aibench`
+evaluation with enough discordant pairs to see a 60/40 edge is ~1,300 fights;
+even at 2 fights/s that is ~3 evaluations an hour, and SPSA/CMA-ES over 178
+constants needs thousands. Instead: record the state every time the AI is
+asked to move, label it with the fight's outcome, and fit the eval's own
+coefficients by logistic regression over the corpus -- Texel tuning. Zero
+fights per candidate; the label stays win/loss only. `src/tuning/texel.py`.
+
+- [x] Probe: `Benchmark.DEBUG_TUNE` gates a `TXL|` line after `init()` in
+      `main` (every living entity's stats, +1 ally / -1 enemy). A few hundred
+      ops a turn; it does not truncate the search it observes.
+- [x] Go/no-go, 2026-08-24: 800 fights (aibench panel + mirror, 100 seeds x 2
+      orientations), 31,510 states, `data/texel_20260824.csv`. **Go, but not
+      on this corpus.** Log-loss 0.22 vs 0.69 baseline, 92% accuracy -- but
+      matchup x side dummies alone reach 0.245 / 92.0%; the stats add only
+      0.245 -> 0.216. Five builds, near-deterministic outcomes per matchup.
+      What moves within a fight (HP, HPMAX, TP, MP) fits with the right sign
+      and scale and survives fixed effects (TP 85 vs hand 40, MP 112 vs 60).
+      What does not move (STR, RST, MGC...) is build identity: RST -24 is
+      "Claudias loses to Claudius". RELSHIELD stays negative under fixed
+      effects: a shield up means under attack -- the "king in check" problem.
+- [x] **Corpus 2: 56 real builds** (`src/tuning/roster.py`: own leeks on the
+      five accounts + their garden opponents + ladder top, full packages via
+      `/leek/get`, cores/ram overridden to ours), 500 random pairs x 2
+      orientations, `data/texel_roster_20260824.csv`, 58,220 states, 15% draws.
+      Not random builds: a leek is a package (capital + components + chips +
+      weapons) and the generator only sees its final numbers; random stats
+      would fit a world nobody plays. Log-loss: build identity only 0.540,
+      stats only 0.561, both 0.500 (acc 75%). Stats now add information on
+      top of who is fighting. `fit --fe build` is the honest fit.
+      - **Measurable:** TP 60 / MP 70 vs hand 40 / 60 -- above the hand value
+        on both corpora, with and without fixed effects. First candidate
+        for an `aibench` validation.
+      - RELSHIELD flipped positive (4.4 vs hand 6) once builds varied.
+      - HPMAX ~0: collinear with HP in a state, and the hand 10 pays a
+        *loss* of max HP (erosion), which a state does not show.
+      - Base stats (STR, RST, AGI, WSD) still unidentifiable: under build
+        fixed effects they only move through buffs/debuffs, which are
+        reactions ("king in check" again). Needs quiet states or deltas.
+- [x] **Replayer** (`src/tuning/replay.py`, 2026-08-25): scraped `/fight/get`
+      replays -> the same states the probe logs. Validated on local fights:
+      3,354 values, 0 mismatches. Traps found on the way: `112` nova
+      vitality raises max life only (`104` raises both); `[12, chip, ...]`
+      carries the CHIP id (manumission = 100) while the effect it adds
+      carries the ITEM id (174); tagadalive casts manumission before
+      `init()`, so the snapshot skips that cast and its removals.
+- [x] **Site corpus** `data/texel_site_2025-12.csv`: 11,834 solo 301-vs-301
+      fights from `fights.db` (Dec 2025), 1,816 leeks, 773 farmers, 533k
+      states. **Per-fight weighting is mandatory**: draws are 18% of fights
+      but 50% of states (they run to the 64-turn cap) and drag every
+      coefficient toward 0.5. `fit` now weights each state by 1/(states of
+      its fight); `--per-state` restores the old behaviour, `--no-draws`
+      drops draws. Fixed effects are sparse (`--fe farmer` for the site).
+- [x] **Result** (farmer FE, per-fight, 90% bootstrap CI over fights):
+      TP 38 [33, 41] vs hand 40; MP 54 [46, 64] vs 60; RELSHIELD 7.4 [6.8, 8.3]
+      vs 6; ABSSHIELD 2.2 vs 3; DMGRETURN 2.6 vs 3; STR 1.3 [1.2, 1.4] vs 1;
+      MGC 1.5 vs 1. **The hand-tuned row is validated on real fights for
+      everything a state can see.** Still unidentifiable: HPMAX (collinear;
+      the hand value pays erosion), SNC ~0, RST < 0, WSD ~0.
+      Corpus 2 re-fitted per-fight: TP 51 [35, 64], MP 109 [84, 134] -- MP
+      disjoint from the site interval: play-dependent, or corpus 2 too small.
+- [ ] Corpus 2 x4 (4,000 fights, ~35 min) to settle MP under our play; then
+      `aibench` on `ENTITY_LEEK.MP` at the fitted value vs current.
+- [ ] Shields and base stats need a delta-based or "quiet state" treatment
+      before their coefficients mean anything.
+- [ ] Re-scrape fresh 301 solo fights for the temporal check (which
+      coefficients move with the meta).
+- [ ] Then: modifier exponents (§2.4 as a fit), per-archetype conditioning
+      (§2.2 as a regression term), `aibench` on the fitted candidate.
+
 ### 2.1 Position dump under a surplus-cores harness
 
-- [ ] Dump evaluated positions with their outcome labels.
+- [~] Dump evaluated positions with their outcome labels. **The per-turn
+      state dump (§2.0b) is done and is enough for Texel.** What is left
+      open is dumping the *evaluated combos* too, which is what needs the
+      surplus cores below.
 
 Must run with **more cores than the live budget**. The AI deliberately
 saturates its op budget — it runs as many evaluations as fit in the turn.
@@ -117,8 +205,9 @@ every one of them than its own fit would be.
 
 ### 2.3 Gate on evaluation count, not just score
 
-- [ ] The harness must record evaluations-per-turn alongside win rate, and
-      reject candidates that reduce it.
+- [~] The harness must record evaluations-per-turn alongside win rate, and
+      reject candidates that reduce it. Recording is done (`turn_stats`);
+      the gate itself is not written.
 
 This is the subtle one. A weight change can **truncate the search** without
 any individual score being wrong — make the eval more expensive, fewer
@@ -172,10 +261,14 @@ prose** — deliberate, the prose gets written over them.
       therefore why tuning it is the whole project.
 - [ ] **Article II** — "La seule chose que mon IA prédit vraiment"
       (`/carnet/ii/`). Write the prose over the plan.
-- [ ] **Article III** — "Le banc d'essai". Not started. Article II ends on the
+- [x] **Article III** — "Huit fois plus de combats, et une idée volée aux
+      échecs" (`/carnet/iii/`), 2026-08-24. Illustrated bullet plan like I
+      and II: the compile pipeline and where a fight's time goes, the
+      throughput bars, the Texel idea with a dataset grid and the first fit.
+- [ ] **Article IV** — "Le banc d'essai". Not started. Article II ends on the
       noise floor, which is exactly what this one is about.
 
-Material on hand for III:
+Material on hand for IV:
 - **The forced-50% artifact.** `aibench` returned exactly 50%, every time.
   Cause, read out of the generator source: `StartOrder.compute` draws turn
   order weighted only by `frequency`, and consumes the same RNG values in

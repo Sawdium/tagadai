@@ -137,6 +137,12 @@ python -m src.tools.localfight --json               # raw generator output
 > - **`cores` sets the op budget** (`cores × 1M`). Leave it at the `LeekConfig`
 >   default of 1 and the AI blows the limit on turn one.
 
+> **Note**: batch fights run on **persistent generator JVMs** (`src/localfight/batch.py`,
+> `GeneratorPool`) with the compile cache ON — ~2 fights/s on this machine against 0.26
+> with one JVM per fight. Do not pass `--nocache` or start one JVM per fight in new
+> tools; see [src/localfight/README.md](src/localfight/README.md#throughput-cache-persistent-workers-jvm-flags).
+> `FightResult.turn_stats` carries per-turn ops and ComboExplorer evaluations (ml/TODO.md §2.3).
+
 > **Note**: `src/localfight/` needs **Java 25** — the generator is compiled for
 > it and will not load on an older JVM. `setup_generator.sh` downloads a private
 > JDK 25 + Gradle 9 into `.cache/toolchain/` (no sudo, nothing system-wide), then
