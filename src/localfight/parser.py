@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Optional
 
+from .logs import TurnStats, parse_turn_stats
+
 
 class ActionType(IntEnum):
     """
@@ -126,6 +128,11 @@ class FightResult:
     # Seed for reproducibility (if available)
     seed: Optional[int] = None
 
+    # Per own-turn search statistics read from the AI's debug lines (ops
+    # spent vs budget, ComboExplorer evaluations). Empty when the scenario
+    # ran without logs or with an AI that does not emit them.
+    turn_stats: list[TurnStats] = field(default_factory=list)
+
     @property
     def team1_won(self) -> bool:
         return self.winner == 0
@@ -165,6 +172,7 @@ def parse_fight_result(result: dict) -> FightResult:
         turns=turns,
         raw_actions=raw_actions,
         seed=result.get("random_seed"),
+        turn_stats=parse_turn_stats(result),
     )
 
 

@@ -30,6 +30,7 @@ import sys
 from src.common import LeekWarsAPI, load_credentials
 from src.common.config import get_paths
 from src.common.errors import TagadAIError
+from src.localfight.logs import LOG_ERROR_TYPES, LOG_WARNING_TYPES, collect_logs  # noqa: F401 (re-exported)
 from src.localfight.runner import RunnerError, run_fight_raw
 
 DEFAULT_AI = "tagadalive/main"
@@ -37,22 +38,6 @@ DEFAULT_AI = "tagadalive/main"
 # leekscript AILog levels. 1/2/3 come from the AI's own debug()/debugW()/debugE();
 # 6/7/8 are the same levels raised by the engine itself (unknown weapon, chip
 # not equipped...), which is where silent build problems surface.
-LOG_WARNING_TYPES = {2, 7}
-LOG_ERROR_TYPES = {3, 8}
-
-# FarmerLog system-log codes worth naming when they show up.
-LOG_CODES = {
-    1000: "NO_WEAPON_EQUIPPED",
-    1001: "CHIP_NOT_EQUIPPED",
-    1002: "CHIP_NOT_EXISTS",
-    1003: "WEAPON_NOT_EXISTS",
-    1004: "WEAPON_NOT_EQUIPPED",
-    1006: "LOADOUT_NOT_FOUND",
-    1007: "SET_LOADOUT_OUT_OF_HOOK",
-    1008: "ACTION_DENIED_IN_HOOK",
-}
-
-
 def link_ai_tree(ai_path: str) -> None:
     """Expose the AI tree an `--ai` path lives in inside the generator dir.
 
@@ -178,29 +163,6 @@ def build_scenario(entities: list[dict], seed: int | None, max_turns: int) -> di
     if seed is not None:
         scenario["random_seed"] = seed
     return scenario
-
-
-def collect_logs(result: dict) -> list[tuple[int, int, str]]:
-    """Flatten the generator's log buckets into (entity id, level, text).
-
-    Entries are `[entityId, level, message, ...]`; system logs append a
-    FarmerLog code and its parameters, and carry an empty message. Every
-    entity shares bucket "0" because the CLI never sets `aiOwner`, so the
-    entity id inside the entry is the only way to tell them apart.
-    """
-    out = []
-    for bucket in (result.get("logs") or {}).values():
-        for entries in bucket.values():
-            for entry in entries:
-                if len(entry) < 3:
-                    continue
-                text = str(entry[2])
-                if not text and len(entry) >= 4:
-                    code = entry[3]
-                    params = entry[4] if len(entry) > 4 else []
-                    text = f"{LOG_CODES.get(code, code)} {params}"
-                out.append((entry[0], entry[1], text))
-    return out
 
 
 def report(result: dict, entities: list[dict], show_logs: bool) -> int:
