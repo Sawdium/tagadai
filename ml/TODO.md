@@ -172,22 +172,53 @@ exposed turns), and the turn-order wrap in
 Datasets kept for re-analysis (`--report-only`, no fights replayed):
 `data/danger_20260824_*.csv` and `data/danger_after_libe*.csv`.
 
-Left open, in the order they are worth doing:
-- [ ] Liberation without the TP debit (see above).
-- [ ] Teleportation and inversion: the enemy ends up somewhere the reach maps
-      never credited. Second and third largest breach classes, both unmodelled.
-- [ ] `Entity.nextLiberation` is written at `MapDanger:138` and read nowhere.
-      Delete the call or wire it up.
-- [ ] `Damages:80` snapshots `effectiveRel` before the liberation block halves
-      it, while the same damage formula reads `absShield` after. The liberator
-      gets credit for stripping absolute but not relative shield. One-line move,
-      but it shifts the whole danger map, so it needs its own measured run.
+**Settled 2026-08-24: `effectiveRel` now snapshots after the liberation block.**
+It used to be taken before, while the same formula read `absShield` after, so a
+liberating enemy got credit for stripping one shield and not the other.
+
+- Aggregate breach rate did not move (13.3% -> 13.6%, median overshoot
+  735 -> 717 HP). Expected: the effect is far under the ~5-point noise floor.
+- **Paired-prefix comparison is what showed it works.** Both runs share seeds,
+  so each fight is identical until the changed danger first alters a choice.
+  Restricting to turns where turn, cell, hp, tp, mp, enemy count, both shields,
+  nearest distance and `libe_mapped` all match gives 862 truly paired turns:
+  852 unchanged, 10 changed, **9 of them upward**, median **+243 HP** (5.4% of
+  max HP). Upward is the direction a missing shield-strip should move a worst
+  case. This technique is the only paired signal this harness can produce —
+  reuse it for any change too small for the aggregate.
+- Reachable on 194 turns (14%), but this build's relative shields cap at 25, so
+  halving one moves the multiplier 0.75 -> 0.875 and rarely crosses a threshold.
+
+**The remaining downward turn is a real defect, older than this change.**
+Seed 17 turn 7 carries `rel_shield` = **-5** — an enemy debuff on us, not a
+shield. `Damages:99-101` multiplies both shields by `LIBE_DEBUFF_FACTOR`
+unconditionally, so the simulated liberation halves the enemy's own debuff and
+*lowers* predicted danger. A conditional worst case must never assume the enemy
+helps us.
+
+- [ ] Guard the liberation strip so it only shrinks shields that are positive
+      (`Damages:99-101`, and `libeFactor` with it). One line each; the paired
+      prefix above is how to check it.
+
+**Danger model is frozen here for now** (decided 2026-08-24). It is accurate
+enough to tune weights through, and the harness cannot resolve anything smaller
+than ~5 points, so further modelling work is untestable until §2 exists. The
+items below stay open at **low priority**:
+
+- [ ] *(low)* Liberation without the TP debit (see above).
+- [ ] *(low)* Teleportation and inversion: the enemy ends up somewhere the reach
+      maps never credited. Second and third largest breach classes, both
+      unmodelled.
+- [ ] *(low)* `Entity.nextLiberation` is written at `MapDanger:138` and read
+      nowhere. Delete the call or wire it up.
 
 ---
 
 ## 2. Tuning harness
 
-Blocked on §0, but the design constraints are already known.
+**Unblocked (2026-08-24).** §0 sent the danger model first, §1.1 measured and
+fixed it, and it is now frozen: accurate enough to tune through, and anything
+further is below what the harness can resolve. This is the active work.
 
 ### 2.1 Position dump under a surplus-cores harness
 
