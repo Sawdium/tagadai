@@ -79,12 +79,6 @@ replayed): `data/danger_20260824_*.csv`, `data/danger_after_*.csv`.
 
 ### Open
 
-- [ ] **The liberation strip does not check the sign.** `Damages:99-101`
-      multiplies both shields by `LIBE_DEBUFF_FACTOR` unconditionally, but a
-      negative relative shield is an enemy *debuff* on us — so the simulated
-      cast halves the enemy's own debuff and *lowers* predicted danger. A worst
-      case must never assume the enemy helps us. One line each, plus
-      `libeFactor`; check it with the paired prefix.
 - [ ] *(low)* Liberation without the TP debit. The branch charges the enemy
       5 TP, which costs more predicted damage than the halved shield adds back —
       the likely reason the liberation fix did not move the rate. A worst case
@@ -221,6 +215,14 @@ Recorded so they are not re-argued. Detail is in git history and in the carnet.
 - **`effectiveRel` snapshots after the liberation block** (2026-08-24), so a
   liberating enemy is credited with stripping both shields instead of only the
   absolute one.
+- **The liberation strip stays sign-blind** (2026-08-24). Halving a *negative*
+  relative shield looked like the model assuming the enemy removes its own
+  debuff, but it is faithful: liberation is `EffectDebuff` -> `reduceEffects`,
+  which scales every reducible effect on the target, vulnerability included
+  (`EffectVulnerability` is an ordinary effect setting `STAT_RELATIVE_SHIELD` to
+  `-value`), and `Effect.reduce` scales negative stats toward zero on purpose —
+  `Math.abs(statValue) * reduction * Math.signum(statValue)`. The enemy does not
+  get to strip selectively, so neither should the model.
 - **`getChipReadyModifier` clamps to `CHIP_READY_MAX`** (2026-08-23). Ceiling
   20.0 is above the 19.0 a build can reach, so it changed no behaviour — it is
   there so the term saturates instead of running away once fitted.
