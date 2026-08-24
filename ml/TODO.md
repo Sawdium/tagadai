@@ -12,7 +12,10 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done
 
 ## 0. The fork: danger model first, or weights first?
 
-- [ ] **Decide the order.** Not yet discussed together.
+- [x] **Resolved 2026-08-24: danger model first.** §1.1 measured it instead of
+      arguing it. The error is conditioned, not scalar — 0.7% against 20.3%
+      breaches between two leeks in the same fights, 0.6% against 7.6% by
+      distance — and no fitted weight absorbs a spread like that.
 
 The danger model feeds the eval. Every weight downstream of it is fitted
 *through* it. If the danger model is systematically wrong, tuning weights
@@ -30,8 +33,7 @@ Arguments for **weights first**:
   weights is the simpler first target.
 - The danger model may already be good enough that the effort is wasted.
 
-Suggested resolution: run §1.1 *before* the discussion, so we argue from
-measurements instead of intuition.
+That is what happened: §1.1 ran first, and the measurement settled it.
 
 **Prerequisite either way:** `tagadalive/TODO.md` §1.5 — the ally-in-danger
 boost currently reaches only mid-turn summons, never ally leeks. Whatever we
@@ -246,34 +248,47 @@ respects should be recorded here before the first SPSA/CMA-ES run.
 
 ## 3. Carnet
 
-Public journal at `ideesnoires.fr/leekwars/carnet/`.
-Source: `~/Desktop/ideesnoires/leekwars/carnet/`.
+Public journal, now a blog: `ideesnoires.fr/leekwars/carnet/` lists the
+entries, each entry lives at `/carnet/<numeral>/`.
+Source: `~/Desktop/ideesnoires/leekwars/carnet/`, deployed with
+`leekwars/deploy.sh` (rsync + chown, no service restart).
 
-### 3.1 Article I — rewrite from the plan
+Both published entries are **illustrated bullet plans, not finished prose** —
+that is deliberate, the prose gets written over them.
 
-- [x] `carnet/index.html` now holds a bullet plan of the whole article
-      (2026-08-24); the original prose is kept beside it as
-      `index.html.orig`. Numbers, the era table, both charts, the two-feature
-      list and the six-step outline were carried over verbatim.
+### 3.1 Article I — "Où branche-t-on un réseau sur un poireau ?"
+
+- [x] Published at `/carnet/i/` (2026-08-24) as a bullet plan, with three new
+      inline SVGs: search-vs-eval depth, the accumulator delta, the shape the
+      op budget imposes. The era table, both budget charts, the two-feature
+      list and the six-step outline carried over verbatim. The original prose
+      is parked outside the deployed tree at
+      `~/Desktop/ideesnoires/leekwars-attic/carnet-I-prose-originale.html`.
 - [ ] Write the prose over the plan.
 
-The plan already carries the correction below, in "Ce qu'il y a dans la
-boîte": Article I said Stockfish *"fonctionne pareil"*. It does not, in the
-one way that matters most here.
+The plan carries the correction that prompted the rewrite: Article I said
+Stockfish *"fonctionne pareil"*. The shape is shared (search + eval), the
+depth is not — `tagadalive` has **no lookahead beyond the current turn**, so
+the entire future lives inside the single-turn eval (`turnsLeft`,
+`durationMitigation`, `getEffectiveDuration`, turn-order modifiers, danger
+and threat maps). That is why the eval carries so much strategy, and
+therefore why tuning it is the whole project.
 
-Stockfish searches deep and evaluates leaves. `tagadalive` has **no
-lookahead beyond the current turn** — the entire future lives inside the
-single-turn eval (`turnsLeft`, `durationMitigation`,
-`getEffectiveDuration`, turn-order modifiers, danger and threat maps).
+### 3.2 Article II — "La seule chose que mon IA prédit vraiment"
 
-The shape is shared (search + eval), the depth is not. And this is not a
-footnote: it is why the eval carries so much strategy, and therefore why
-tuning it is the whole project. Worth a short paragraph rather than a
-correction — it sets up everything after.
+- [x] Published at `/carnet/ii/` (2026-08-24) as a bullet plan, covering §1.1:
+      danger as a conditional worst case, why the predicted-vs-realized gap is
+      not an error, the five ways of counting wrong, the coverage numbers, the
+      breach rate by what the enemy cast, and the noise floor. Two SVGs: the
+      measurement window (which codes count, in which window), and the breach
+      rate per chip against the 12% baseline.
+- [ ] Write the prose over the plan.
 
-### 3.2 Article II — "Le banc d'essai"
+### 3.3 Article III — "Le banc d'essai"
 
-- [ ] Write it. The material is real and already measured.
+- [ ] Write it. The material is real and already measured, and it now has a
+      natural place: article II ends on the noise floor, which is exactly what
+      this one is about.
 
 Content on hand:
 - **The forced-50% artifact.** `aibench` returned exactly 50%, every time.
@@ -288,4 +303,7 @@ Content on hand:
 - **Sampling noise vs replication noise.** Same seed reproduces; different
   seeds do not. These are two different uncertainties and conflating them
   is how people talk themselves into fake improvements.
+- **The unpaired-run trap, from §1.1.** Changing the danger changes which
+  cells the AI picks, so seeds no longer hold the fight fixed: a slice moved
+  five points across three runs that changed nothing about it.
 - **The 1.1% damage metric** — and why we are not tuning on it.
