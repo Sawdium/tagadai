@@ -7,6 +7,10 @@ serializing them to the generator's JSON format.
 The generator only reads `random_seed`, `max_turns`, `farmers`, `teams` and
 `entities` from this JSON — `map` is serialized but ignored by
 `Scenario.fromFile()`, so every local fight runs on a randomly generated map.
+`context` and `type` are ignored the same way, and both default to 0: a local
+fight is always `CONTEXT_TEST`, whose only effect is a Nexus map type (-1)
+instead of the garden's random 0-4. Adding either key to the JSON does
+nothing at all.
 See src/localfight/README.md for the full generator contract.
 """
 

@@ -20,7 +20,7 @@ on top of it does not fix the error — it fits compensating weights that
 bake the error in and make it harder to remove later.
 
 Arguments for **danger first**:
-- It is a prediction with a ground truth (see §1.2), so it can be checked
+- It is a prediction with a ground truth (see §1.1), so it can be checked
   without any optimiser at all.
 - Errors here are structural, not scalar. No weight can undo them.
 - It is cheap to measure — we already log `Position.dmg`.
@@ -30,7 +30,7 @@ Arguments for **weights first**:
   weights is the simpler first target.
 - The danger model may already be good enough that the effort is wasted.
 
-Suggested resolution: run §1.2 *before* the discussion, so we argue from
+Suggested resolution: run §1.1 *before* the discussion, so we argue from
 measurements instead of intuition.
 
 **Prerequisite either way:** `tagadalive/TODO.md` §1.5 — the ally-in-danger
@@ -42,42 +42,144 @@ settled, or the fitted value silently changes meaning when it is.
 
 ## 1. Investigations
 
-### 1.1 Local-vs-live divergence at action 17
+Local fights are trusted: the local generator matches the live server on
+map, obstacles and placement for the same seed (checked 2026-08-24), and it
+tracks upstream master.
 
-- [ ] Set `context` in the scenario and re-run seed 432077940.
+### 1.1 Danger model accuracy
 
-What we know: the local generator reproduces a live fight **exactly** for
-map, placement and the first 16 actions, then diverges on a weapon choice
-at action 17.
+The danger map is a **conditional worst case**: per enemy it takes the best
+damage-per-TP item and spends that enemy's TP on it, respecting use limits and
+cooldowns, until the TP runs out (`Items.getOrderedOffensiveItems`, then the
+item loop in `Damages.computeDanger`). It answers *what could this cell cost
+me if every enemy went fully offensive*, not *what will it cost me*.
 
-Ruled out: the Level-1 scoring refactor. Pre- and post-refactor action
-lists were byte-identical, 931/931 actions.
+**The gap between predicted and realized is therefore not an error, and is not
+a metric.** A well-chosen cell is one the enemy declines to attack — it buffs
+instead — so danger going unspent is the map working. Measuring "tightness"
+scores the AI's positioning as if it were a modelling defect. There is exactly
+one defect worth counting:
 
-Remaining suspects:
-1. Generator version skew (local JAR vs the live server's build)
-2. `CONTEXT_TEST` vs `CONTEXT_GARDEN`
+> **when does the realized damage come in ABOVE the danger predicted?**
 
-Suspect 2 is a one-line experiment, so it goes first.
+Everything else the tool prints is context for reading those cases.
 
-**Why this blocks everything else:** local fights are the only free,
-unlimited signal we have. If they diverge from live in ways that matter,
-every number the tuning harness produces is measuring a different game
-than the one we are trying to win. This should be settled before any
-optimiser runs.
+- [x] Harness built (2026-08-24): `python -m src.tools.dangerprobe`.
+      `tagadalive/main` logs one line per turn under
+      `Benchmark.DEBUG_DANGER` (a compile-time constant, false in the shipped
+      AI, flipped only in the throwaway `.dangerprobe/` copy the tool makes),
+      carrying the Danger of the cell we actually end on. The tool replays
+      seeded local fights, reads the realized damage victim-side out of the
+      action list, and reports coverage plus slices.
+- [x] Measured, 2026-08-24. Everything below is what the runs actually said.
 
-### 1.2 Danger model accuracy
+**Coverage, 20 seeds per matchup, local self-play**
 
-- [ ] Compare predicted `Position.dmg` against realized damage taken on
-      the following turn, across a spread of seeds and archetypes.
+| matchup | exposed turns | breaches | median overshoot |
+|---|---|---|---|
+| Claudius mirror (MGC/SNC) | 1503 | 5.9% | 98 HP (2.6% max HP) |
+| Claudius vs Claudias | 519 | 10.0% | 238 HP |
+| JCGloomy mirror (STR 730) | 1199 | 12.6% | 698 HP (16.0% max HP) |
+| JCGloomy vs SweetDude | 1294 | 16.8% | 448 HP |
 
-Report should separate:
-- **Bias** — do we systematically over- or under-predict?
-- **Variance** — how noisy is the prediction around its mean?
-- **Conditioning** — is the error uniform, or concentrated in particular
-  situations (many enemies, specific archetypes, low MP, corner cells)?
+- Magic builds understate the problem: their damage is poison, spread over
+  turns and discounted by `durationMitigation`. Strength builds land it inside
+  the window and breach twice as often, three times as hard.
+- **The error is conditioned, not scalar.** Claudias 0.7% against Claudius
+  20.3% in the same fights; 0.6% at 2-6 cells against 7.6% at 7+; 1.2% on
+  T1-3 against 6.5% from T9. No fitted scalar touches a spread like that ->
+  **§0 resolves to danger first.**
 
-Bias is correctable with a scalar. Conditioned error is not, and would be
-the strongest possible argument for §0 = danger first.
+**What breaches, by what the enemy did that turn** (JCGloomy mirror, 12.0%
+baseline)
+
+- liberation cast: 56.9% -- it strips shields the map assumed would hold
+- teleportation cast: 50.8% -- reach maps never credit the destination
+- inversion: 21.2% -- swaps positions, nothing models it
+- adrenaline: 5.8%, *below* baseline. The +4 TP hypothesis was not supported.
+- danger-map truncation: 1 turn in 1364, and that one at `E:5/5`. The
+  round-robin early exit is **not** a cause. Hypothesis closed.
+
+**Liberation, chased to the end**
+
+- Three gates had to be open. Two were shut for any low-RST build:
+  `BattleState:114` keyed the coverage map on the RST *stat* (>= 200) while
+  shields come from chips, and both trigger sites tested relative shield only.
+- Fixed: `allyHasShield` (shields present, or an RST chip ready via
+  `rstCount`), plus `ScoringConfig.libeWorthCasting(abs, rel)` shared by
+  `Damages:92` and `MapDanger:86`. Gates 1 and 2 now open on 66.7% of
+  liberation turns, up from never.
+- Gate 3 fires on 35% of them: this build's shields are abs median 90, max
+  235, rel ~0, against a 200 abs-alone trigger.
+- **Breach rate did not improve** (12.6% -> 13.3%). Most likely the TP debit:
+  the branch charges the enemy 5 TP, which costs more predicted damage than
+  the halved shield adds back. Next experiment is to strip the shields without
+  charging the TP -- a worst case should assume both.
+
+**The measurement is now the bottleneck**
+
+- Runs are NOT paired. Changing the danger changes which cells the AI picks,
+  so fights diverge from turn one. Teleport-turn breaches moved 50.0 -> 56.1
+  -> 55.5 across three runs that changed nothing about teleport: that is the
+  noise floor, ~5 points on a slice.
+- Anything finer needs prediction scored against *recorded* fights instead of
+  freshly played ones. Until then, only effects bigger than ~5 points are
+  visible.
+
+**Five traps, all of which produced wrong numbers before being fixed.** They
+are the reason the first four reports were nonsense, and any future metric
+over this data has to respect them:
+
+1. **Nova damage is not damage.** `EffectNovaDamage` calls
+   `removeLife(0, value, ...)` — pv zero, everything into erosion, capped at
+   the HP already missing. Action 107 lowers MAX life; current life never
+   moves. Counting it as HP taken invented a 63% breach rate out of nothing;
+   on a science build it is the biggest number in the log (808 against 146 of
+   real damage on the first turn checked).
+2. **The bound is on the total, not on the components.** Because the enemy's
+   whole TP goes to its best damage-per-TP item, a poison build puts
+   everything in `psnDmg` and leaves `dmg` at 0 — then fires a weapon anyway.
+   Checking `dmg` alone reported a 48% breach rate; checking
+   `dmg + psnDmg` against instant + poison reports 12%. `Danger.score` uses
+   the sum, so the sum is the bound. The split being wrong is still worth
+   counting, and the tool reports it separately.
+3. **Ally healing is already subtracted from the prediction.** The ally branch
+   of `computeDanger` takes heals off `dmg`, so the realized side has to be
+   netted the same way or every bulb heal reads as model pessimism.
+4. **Poison is charged to the victim at the start of its own turn**, so it
+   lands outside the "between our turns" window. It needs window A *and* our
+   own next turn. And `psnDmg` is duration-mitigated — it stands for several
+   future turns, so one turn of ticks coming in under it is expected, not
+   slack.
+5. **Poison already ticking on us is not the cell's fault.** It lands wherever
+   we stand, so a cell's Danger never claimed to bound it — but it arrives on
+   the same action codes. Left in, it *was* the measurement: of 208 breaches,
+   154 were pure pre-existing poison at a median distance of 15 cells from the
+   nearest enemy. `Entity.psnTurn` (net of heal-over-time) is what the AI
+   already knows about it, so the probe logs it and the tool subtracts it.
+   Correcting this alone took the mirror matchup from 13.8% to 5.9%.
+
+Hypotheses killed by the instrumentation, each in one run, all recorded so
+they are not re-run: shields filtering items out of `offensiveItems` (shields
+were 0 in the breaches), the danger budget truncating the round-robin before
+every item got a reach map (items kept == items mapped), stale enemy MP
+(`Entity.mp` is `getMP(id)`, but the closest enemy had full MP in 217 of 223
+exposed turns), and the turn-order wrap in
+`Fight.getEntitiesAfterSelfInOrder` (correct).
+
+Datasets kept for re-analysis (`--report-only`, no fights replayed):
+`data/danger_20260824_*.csv` and `data/danger_after_libe*.csv`.
+
+Left open, in the order they are worth doing:
+- [ ] Liberation without the TP debit (see above).
+- [ ] Teleportation and inversion: the enemy ends up somewhere the reach maps
+      never credited. Second and third largest breach classes, both unmodelled.
+- [ ] `Entity.nextLiberation` is written at `MapDanger:138` and read nowhere.
+      Delete the call or wire it up.
+- [ ] `Damages:80` snapshots `effectiveRel` before the liberation block halves
+      it, while the same damage formula reads `absShield` after. The liberator
+      gets credit for stripping absolute but not relative shield. One-line move,
+      but it shifts the whole danger map, so it needs its own measured run.
 
 ---
 
@@ -147,10 +249,17 @@ respects should be recorded here before the first SPSA/CMA-ES run.
 Public journal at `ideesnoires.fr/leekwars/carnet/`.
 Source: `~/Desktop/ideesnoires/leekwars/carnet/`.
 
-### 3.1 Article I — qualify the Stockfish claim
+### 3.1 Article I — rewrite from the plan
 
-- [ ] Article I says Stockfish *"fonctionne pareil"*. It does not, in the
-      one way that matters most here.
+- [x] `carnet/index.html` now holds a bullet plan of the whole article
+      (2026-08-24); the original prose is kept beside it as
+      `index.html.orig`. Numbers, the era table, both charts, the two-feature
+      list and the six-step outline were carried over verbatim.
+- [ ] Write the prose over the plan.
+
+The plan already carries the correction below, in "Ce qu'il y a dans la
+boîte": Article I said Stockfish *"fonctionne pareil"*. It does not, in the
+one way that matters most here.
 
 Stockfish searches deep and evaluates leaves. `tagadalive` has **no
 lookahead beyond the current turn** — the entire future lives inside the
