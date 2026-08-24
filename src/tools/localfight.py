@@ -47,7 +47,9 @@ def link_ai_tree(ai_path: str) -> None:
     before the check, and the read follows the link.
 
     The tree is the first segment of the AI path, so `tagadalive/main` and
-    `tagadargb/main` each link their own directory.
+    `tagadargb/main` each link their own directory. A tree that is not at the
+    repo root is looked up under `.cache/variants/`, where
+    `src.tuning.variant` writes rewritten copies of tagadalive.
     """
     tree = ai_path.split("/")[0]
     if not tree or tree in (".", ".."):
@@ -57,7 +59,9 @@ def link_ai_tree(ai_path: str) -> None:
     link = paths.generator_dir / tree
     target = paths.root / tree
     if not target.is_dir():
-        raise TagadAIError(f"No local AI tree at {target}")
+        target = paths.variants_dir / tree
+    if not target.is_dir():
+        raise TagadAIError(f"No local AI tree at {paths.root / tree} or {target}")
     if link.is_symlink():
         if link.readlink() == target or link.resolve() == target:
             return

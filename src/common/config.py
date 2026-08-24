@@ -95,6 +95,11 @@ class ProjectPaths:
         return self.root / ".cache" / "toolchain"
 
     @property
+    def variants_dir(self) -> Path:
+        """Generated AI trees (tagadalive with constants rewritten) for tuning runs."""
+        return self.root / ".cache" / "variants"
+
+    @property
     def java_bin(self) -> Optional[Path]:
         """
         Java executable able to run the generator (needs Java 25+).
