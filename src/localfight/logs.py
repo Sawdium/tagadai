@@ -1,15 +1,10 @@
 """
 AI log access for generator output.
 
-The generator returns `debug()` output under `logs`, bucketed by AI owner then
-by entity. Two lines the AI already emits every own turn carry the search
-statistics a tuning harness has to watch (see ml/TODO.md §2.3):
-
-    ComboExplorer: 177 combos, best=P0:Stay score=29109 <Combo: [...
-    ##MARKER##T2|n:Claudius|o:14555876/19000000|hp:3388/3512|tp:1/31|...
-
-`parse_turn_stats` reads them back. Nothing here costs the AI an operation:
-both lines were there before this module existed.
+`collect_logs` flattens the `logs` buckets. `parse_turn_stats` reads the two
+lines the AI already emits every turn -- `ComboExplorer: N combos, ...` and
+`##MARKER##T<turn>|n:<name>|o:<ops>/<max>|...` -- into per-turn search
+statistics (ml/TODO.md §2.3) at no cost to the AI.
 """
 
 from __future__ import annotations

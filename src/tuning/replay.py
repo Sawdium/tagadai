@@ -1,27 +1,21 @@
 """
-Replay a fight's action log into Texel states, so real LeekWars fights can
-feed the fit without playing anything.
+Replay a fight's action log into Texel states, so scraped fights feed the fit.
 
-A fight replay (`/fight/get` -> `data`, or the generator's `fight` document)
-carries every leek's starting stats and the full action list. Walking the
-actions reproduces, at every `LEEK_TURN`, exactly the numbers the AI's probe
-logs (`TXL|` lines, src/tuning/texel.py): life, max life, shields, buffed
-stats, total TP/MP. `validate` proves that on local fights where both are
-available; `export` then applies it to the scraped database.
+`validate` diffs replayed states against the probe on local fights (3,354
+values, 0 mismatches); `export` runs the scraped database through it.
 
-What the log says (generator action/*.java, effect/*.java):
-- damage `[101|108|109|110|111, target, pv, erosion]`: life -= pv, max -= erosion;
-  `[107, target, pv, erosion]` nova: pv is what max life loses, life untouched.
-- `[103, target, pv]` heal; `[104, target, v]` vitality: life += v and max += v;
-  `[112, target, v]` nova vitality: max += v only.
-- `[301|302, item, logId, caster, target, type, value, turns, ...]` add effect:
-  `value` is a magnitude; the sign comes from the type (shackles and
-  vulnerabilities subtract). `[14, logId, added]` stacks onto it,
-  `[304, logId, newValue]` rewrites it (liberation), `[303, logId]` ends it.
-- `[105, owner, target, cell, life, maxLife]` resurrect; `[5, id]` death.
+Action semantics (generator action/*.java, effect/*.java):
+- `[101|108|109|110|111, target, pv, erosion]`: life -= pv, max -= erosion;
+  `[107, target, pv, _]` nova: max -= pv.
+- `[103, target, pv]` heal; `[104, target, v]` life and max += v;
+  `[112, target, v]` max += v.
+- `[301|302, item, logId, caster, target, type, value, turns, ...]`: `value`
+  is a magnitude, the sign comes from the type; `[14, logId, added]`
+  stacks, `[304, logId, new]` rewrites, `[303, logId]` ends.
+- `[105, owner, target, cell, life, max]` resurrect; `[5, id]` death.
 
-Bulbs are skipped: `[9, ...]` names the summon but not its stats, and the
-fit only uses leeks anyway.
+Snapshots are taken after start-of-turn bookkeeping, and after the
+manumission tagadalive casts before `init()`. Bulbs are skipped.
 """
 
 from __future__ import annotations

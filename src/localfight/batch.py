@@ -1,30 +1,19 @@
 """
 Persistent generator workers: one JVM each, many fights.
 
-Why this exists
----------------
-A one-shot generator run costs ~3.4s with the compile cache warm, of which
-~2.9s is "execution" -- but most of that is the JIT compiling the AI, not
-the fight. Run 6 such JVMs side by side and each one's execution time goes
-2.9s -> 13.3s: they contend for the JIT and GC threads the JVM sizes for
-the whole machine. Parallel one-shot runs barely beat serial ones.
+A one-shot JVM spends most of a fight JIT-compiling the AI, and N of them in
+parallel starve each other (6 workers: 2.9s -> 13.3s per fight). A worker
+that stays up keeps the compiled AI cached and the JIT'd code hot.
 
-A worker that stays up keeps the compiled AI in the generator's RAM cache and
-the JIT'd code hot, so after the first fight each subsequent one costs only
-its actual fight time. `GeneratorPool` keeps N such workers and hands
-scenarios to whichever is idle.
-
-Protocol (src/localfight/java/BatchMain.java): the worker prints `READY`,
-then for each scenario file path written to its stdin it prints one JSON
-line -- the same document the stock entry point prints, or
-`{"error": "..."}`. The generator's own chatter is diverted to stderr, which
-is captured to a per-worker log under `.cache/batch/`.
+Protocol (java/BatchMain.java): the worker prints `READY`, then one JSON
+line per scenario path written to its stdin -- the stock entry point's
+document, or `{"error": "..."}`. Generator chatter goes to stderr, captured
+in `.cache/batch/worker-<n>.log`.
 
     with GeneratorPool(workers=8) as pool:
-        results = pool.map([scenario.to_json() for scenario in scenarios])
+        results = pool.map([s.to_json() for s in scenarios])
 
-The worker class is compiled on first use with the toolchain's javac against
-generator.jar and rebuilt whenever the source or the jar is newer.
+Flags and measurements: src/localfight/README.md.
 """
 
 from __future__ import annotations

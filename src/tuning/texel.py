@@ -1,30 +1,23 @@
 """
-Texel probe: fit scoring coefficients to fight outcomes, no fights per candidate.
+Texel fit: eval coefficients from (state, outcome) pairs, no fights per candidate.
 
-Idea (chess engines, "Texel tuning"): record the state every time the AI is
-asked to move, label each state with how THAT fight ended, and choose the
-eval weights that make sigmoid(V(state)) predict the label best. The label is
-win/loss only -- the one signal ml/TODO.md trusts -- and the weights are the
-eval's own stat coefficients, so nothing about the eval's structure changes,
-only its numbers.
+Record the state every time the AI is asked to move, label it with the
+fight's outcome, fit a logistic regression of the label on the eval's own
+stat sums (allies minus enemies). The label stays win/loss only.
 
-Two commands:
+    python -m src.tuning.texel collect --roster data/roster.json --fights 1000 --csv data/c.csv
+    python -m src.tuning.texel fit --csv data/c.csv --fe build
 
-    python -m src.tuning.texel collect --seeds 100 --csv data/texel.csv
-    python -m src.tuning.texel fit --csv data/texel.csv
+`collect` plays fights with a tagadalive copy whose `Benchmark.DEBUG_TUNE`
+is on (one `TXL|` line per turn, a few hundred ops). `fit` reports the
+ENTITY_LEEK row normalised to HP = 1 next to the hand-tuned values.
+Fixed effects (`--fe matchup|build|farmer`, sparse) give each identity its
+own intercept so a stat only earns credit from what moves. States are
+weighted one vote per fight (`--per-state` to disable): draws run to the
+turn cap and would otherwise dominate.
 
-`collect` plays the matchups (default: the aibench panel plus a mirror) with
-a copy of tagadalive whose `Benchmark.DEBUG_TUNE` is flipped, both leeks
-logging, and writes one CSV row per (fight, logger, turn, entity).
-
-`fit` aggregates each logged state into the 13 stat sums the ENTITY_LEEK row
-of EntityCoefs weighs -- allies minus enemies, leeks only -- and fits a
-logistic regression of the fight outcome on them. The result is reported
-normalised to HP = 1.0 so it can be read next to the hand-tuned row.
-
-The probe costs the AI a few hundred operations per turn (one string per
-living entity), against a budget of 15-22 million: it does not truncate the
-search it observes, which is why it does not need surplus cores.
+Known limit: a state coefficient (the value of *having* a stat) is not the
+delta coefficient the eval applies (the value of *changing* it). ml/TODO.md §2.
 """
 
 from __future__ import annotations

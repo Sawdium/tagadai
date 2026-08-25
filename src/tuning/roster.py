@@ -1,21 +1,11 @@
 """
-Roster: real leeks, as complete packages, for a diverse Texel corpus.
+Roster of real leeks, as complete packages, for a diverse Texel corpus.
 
-The first corpus had five builds and the fit learned *who* was fighting
-(ml/TODO.md §2.0b). Diversity has to come from many real leeks, not from
-perturbing one: a leek is a package -- capital stats, components, chips,
-weapons -- and the generator only sees the package's final numbers
-(`total_*` from `/leek/get`), so that is what `build_entity` snapshots.
-
-Sources, all level ~301 and all reachable with the accounts in `.env`:
-- our own leeks on the five accounts;
-- their garden opponents (`/garden/get-leek-opponents`, ~5 per leek);
-- the ladder top ten (`/ranking/get-home-ranking`).
-
-Only `cores` and `ram` are overridden, to the largest our own leeks carry:
-they are the AI's op and memory budget, not part of the build, and ladder
-leeks run one core under hyper-specialised AIs. The live values are kept
-under `live_cores` / `live_ram` for the record.
+A leek is a package -- capital, components, chips, weapons -- and the
+generator only sees its final numbers (`total_*` from `/leek/get`), so
+`build_entity` snapshots exactly that. Sources: our leeks on the five
+accounts, their garden opponents, the ladder top ten. Only `cores`/`ram`
+are overridden (the AI's budget, not the build); live values are kept.
 
     python -m src.tuning.roster gather --out data/roster.json
     python -m src.tuning.roster show data/roster.json

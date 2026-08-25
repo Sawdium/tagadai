@@ -77,44 +77,29 @@ parsed = parse_fight_result(result)
 
 ## Throughput: cache, persistent workers, JVM flags
 
-Three things decide how many fights an hour this machine plays. All three
-were measured on Claudius vs Claudias, 8 physical cores (16 threads).
+Measured on Claudius vs Claudias, 8 physical cores.
 
-**The generator's compile cache is on by default now.** It stores the
-compiled AI as `ai/AI_<hash>.class` with a `.sig` sidecar; the hash is the
-AI *path*, the signature the mtimes of the whole include tree. Any scenario
-on the same unchanged tree hits, an edit invalidates, two trees never
-collide. `--nocache` (what `runner.py` used to pass on every fight) costs
-10.3s per fight against 3.4s cached. The first compile of each AI path in a
-process runs under a per-path lock (`runner._compile_guard`) so parallel JVMs
-cannot race on the `.class` file.
+- **Compile cache on.** The generator caches compiled AIs (`ai/AI_<hash>.class`,
+  keyed by AI path, invalidated by source mtime). `--nocache` cost 10.3s per
+  fight against 3.4s. The first compile of each path in a process runs under
+  a lock (`runner._compile_guard`) so parallel JVMs cannot race on the file.
+- **Persistent JVMs** (`batch.py`, `java/BatchMain.java`). One-shot JVMs spend
+  their CPU JIT-compiling the AI and starve each other in parallel (6 workers:
+  2.9s -> 13.3s each). `GeneratorPool` keeps N workers reading scenario paths
+  on stdin and printing one outcome JSON per line; results are byte-identical
+  to one-shot runs. `ParallelRunner`, `aibench`, `dangerprobe` use it.
+- **Flags** (`batch.DEFAULT_JVM_FLAGS`): SerialGC, 2 CPUs, `-Xmx3g`, and C1
+  only -- a hot worker takes 4.1s per fight with C1, 10.1s with C2; the AI's
+  class is too big for C2 to pay off.
 
-**Fights run on persistent JVMs** (`batch.py`, `java/BatchMain.java`). A
-one-shot JVM spends most of its CPU JIT-compiling the AI, and six of them
-side by side go from 2.9s to 13.3s of execution each -- parallel one-shot
-runs barely beat a serial one. `GeneratorPool` keeps N workers up, each
-reading scenario paths on stdin and printing one outcome JSON per line;
-the compiled AI stays in the generator's RAM cache and the JIT'd code stays
-hot. `ParallelRunner`, `aibench` and `dangerprobe` use it. Results are
-byte-identical to one-shot runs for the same seed (`tests/localfight/test_batch.py`).
+| setup (8 workers)                           | fights/s |
+|---------------------------------------------|---------:|
+| one-shot JVM, `--nocache` (old default)     |     0.26 |
+| one-shot JVM, cached, best flags            |     1.12 |
+| persistent pool, C1                         |     2.07 |
 
-**The JVM flags are measured, not guessed** (`batch.DEFAULT_JVM_FLAGS`):
-`-XX:+UseSerialGC -XX:ActiveProcessorCount=2` stop each worker from sizing
-its GC and JIT thread pools for the whole machine; `-XX:TieredStopAtLevel=1`
-keeps the C1 compiler only -- with C2 a hot worker takes 10.1s per fight, with
-C1 4.1s. The generated AI class is too large for C2's optimisations to pay
-for themselves.
-
-| setup (8 workers unless noted)                     | fights/s |
-|----------------------------------------------------|---------:|
-| one-shot JVM, `--nocache`, 6 workers (old default) |     0.26 |
-| one-shot JVM, cached, best flags                   |     1.12 |
-| persistent pool, C1 only                           |     2.07 |
-| persistent pool, 12 workers                        |     2.25 |
-
-`BatchMain` is compiled on first use with the toolchain's `javac` into
-`.cache/batch/` and rebuilt when its source or `generator.jar` is newer.
-Worker stderr goes to `.cache/batch/worker-<n>.log`.
+`BatchMain` is built on first use into `.cache/batch/`; worker stderr goes to
+`.cache/batch/worker-<n>.log`.
 
 ## Generator contract
 

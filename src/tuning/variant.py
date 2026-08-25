@@ -1,28 +1,17 @@
 """
-Materialise a tagadalive variant with scoring constants rewritten.
+Materialise a tagadalive copy with scoring constants rewritten.
 
-LeekScript constants are `static` fields compiled into the AI; there is no
-runtime injection. The only way to play a candidate weight set is to write it
-into a copy of the tree and point the generator at that copy. Each variant
-lives under `.cache/variants/<name>/`, named by a hash of the overrides AND of
-the source tree's file mtimes, so:
+Constants are `static` fields compiled into the AI, so a candidate weight
+set has to be written into a copy of the tree. Copies live under
+`.cache/variants/<name>/`, named by the overrides and the source tree's
+mtimes: same overrides on an unchanged source reuse the copy, and the
+generator's path-keyed compile cache never confuses two.
 
-- the same overrides on an unchanged source reuse the existing copy;
-- the generator's compile cache, keyed by AI path, never confuses two
-  variants or a variant with a stale copy of itself.
+    materialize({"KILL_VALUE": 25000, "ENTITY_LEEK.HP": 1.2})  # -> "v-.../main"
 
-Two kinds of key are accepted in `overrides`:
-
-    "KILL_VALUE": 25000              # a `static <type> NAME = ...` anywhere in the tree
-    "ENTITY_LEEK.HP": 1.2            # an entry of a row in EntityCoefs' tables
-
-The declared type is respected: an `integer` constant is written rounded, a
-`real` one always with a decimal point, a `boolean` as true/false. A key that
-matches no declaration, or more than one, is an error rather than a silent
-no-op -- a tuner that "fits" a constant nobody rewrote learns nothing.
-
-    from src.tuning.variant import materialize
-    ai = materialize({"KILL_VALUE": 25000, "ENTITY_LEEK.HP": 1.2})   # -> "v-3f9a.../main"
+`NAME` rewrites a `static <type> NAME = ...` (type preserved);
+`ROW.STAT` rewrites `Stats.STAT` inside `ROW: [...]` of EntityCoefs.
+A key matching no declaration, or several, is an error.
 """
 
 from __future__ import annotations
