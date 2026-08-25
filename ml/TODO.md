@@ -173,8 +173,33 @@ fights per candidate; the label stays win/loss only. `src/tuning/texel.py`.
       the hand value pays erosion), SNC ~0, RST < 0, WSD ~0.
       Corpus 2 re-fitted per-fight: TP 51 [35, 64], MP 109 [84, 134] -- MP
       disjoint from the site interval: play-dependent, or corpus 2 too small.
-- [ ] Corpus 2 x4 (4,000 fights, ~35 min) to settle MP under our play; then
-      `aibench` on `ENTITY_LEEK.MP` at the fitted value vs current.
+- [x] Corpus 2 x5 (2026-08-25): +4,000 fights (`data/texel_roster_20260825.csv`,
+      merged in `data/texel_roster_5000.csv`), 297k states, 16% draws.
+      Build FE, per-fight, 90% CI: **TP 58 [50, 65], MP 102 [92, 112]** vs
+      hand 40 / 60 -- the intervals tightened and stayed disjoint from the
+      site's 38 [33, 41] / 54 [46, 64]. Under our AI's play a movement point
+      is worth ~1.7x the hand value. RELSHIELD 5.5 [5.1, 6.1] on the hand
+      value; MGC 1.4 [1.2, 1.6]; STR/RST/AGI still reaction-driven.
+- [x] `aibench` on the panel, 60 seeds x 4 matchups (240 pairs each):
+      `ENTITY_LEEK.MP=102`: 9 sweeps vs 13, p = 0.52. `TP=58 + MP=102`:
+      11 vs 9, p = 0.82. **No difference demonstrated; nothing ships.**
+      One AI error line in 480 fights on the second candidate, not
+      reproduced in 48 replays (likely a rare op-limit turn).
+      Two lessons:
+      - **A state coefficient is not a delta coefficient.** `ENTITY_LEEK.MP`
+        only acts when an action *changes* MP (buffs, shackles; within-fight
+        std 2.7), while the state fit measured the value of *having* MP,
+        mostly a build property. Texel on states validates the eval's
+        ratios; it cannot tune what the eval actually scores. §2.1's
+        combo-delta dump is the real next step.
+      - **The panel is seat-decided**: 218-220 of 240 pairs split, i.e. the
+        first mover wins both orientations. ~20 discordant pairs per 480
+        fights can only see a huge effect. Before any further bench, build
+        a panel of matchups with high discordance (measure the split rate
+        per matchup first; drop the seat-decided ones).
+- [ ] Panel selection for `aibench`: play each candidate matchup once per
+      seed in both orientations on the current tree vs itself, keep the
+      matchups whose discordance is highest.
 - [ ] Shields and base stats need a delta-based or "quiet state" treatment
       before their coefficients mean anything.
 - [ ] Re-scrape fresh 301 solo fights for the temporal check (which
